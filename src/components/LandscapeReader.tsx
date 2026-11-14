@@ -87,6 +87,8 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   onRemoveImagePin,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pagesContainerRef = useRef<HTMLDivElement>(null);
+  const activeScrollTargetRef = useRef<{ highlight: HighlightRect; expiresAt: number } | null>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
   const navMenuRef = useRef<HTMLDivElement>(null);
   const filterGroupRef = useRef<HTMLDivElement>(null);
@@ -94,6 +96,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   onPagesResolvedRef.current = onPagesResolved;
 
   const [pdfProxy, setPdfProxy] = useState<LoadedPdfProxy | null>(null);
+  const [defaultPageAspectRatio, setDefaultPageAspectRatio] = useState<number>(0.7727);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<{ w: number; h: number }>({
     w: typeof window !== 'undefined' ? window.innerWidth : 1280,
@@ -208,6 +211,17 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           return;
         }
         handle = opened;
+        try {
+          const firstPage = await opened.pdf.getPage(1);
+          const vp = firstPage.getViewport({ scale: 1 });
+          const ratio = vp.height / Math.max(1, vp.width);
+          if (active && Number.isFinite(ratio) && ratio > 0.2 && ratio < 5) {
+            setDefaultPageAspectRatio(ratio);
+          }
+        } catch {
+          // fall back to default aspect ratio
+        }
+        if (!active) return;
         setPdfProxy(opened.pdf);
         onPagesResolvedRef.current?.(opened.pdf.numPages);
       } catch (err) {
@@ -304,8 +318,55 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   );
 
   useEffect(() => {
-    setNavIndex(-1);
-  }, [filterSelectedColors, filterSelectedStars]);
+    if (!focusedHighlightId) {
+      setNavIndex(-1);
+      return;
+    }
+    const idx = filteredHighlights.findIndex((h) => h.id === focusedHighlightId);
+    setNavIndex(idx);
+  }, [filteredHighlights, focusedHighlightId]);
+
+  // Keep target highlight centered if lazy-loaded pages change height during scroll
+  useEffect(() => {
+    const scrollEl = scrollContainerRef.current;
+    const pagesEl = pagesContainerRef.current;
+    if (!scrollEl || !pagesEl || !pdfProxy) return;
+
+    const cancelActiveTarget = () => {
+      activeScrollTargetRef.current = null;
+    };
+    scrollEl.addEventListener('wheel', cancelActiveTarget, { passive: true });
+    scrollEl.addEventListener('touchstart', cancelActiveTarget, { passive: true });
+
+    const ro = new ResizeObserver(() => {
+      const target = activeScrollTargetRef.current;
+      if (!target) return;
+      if (Date.now() > target.expiresAt) {
+        activeScrollTargetRef.current = null;
+        return;
+      }
+      const pageEl = scrollEl.querySelector(
+        `[data-testid="pdf-page-${target.highlight.pageIndex + 1}"]`
+      ) as HTMLElement | null;
+      if (!pageEl) return;
+      const alignedTop = Math.max(
+        0,
+        pageEl.offsetTop +
+          target.highlight.yCenter * pageEl.offsetHeight -
+          scrollEl.clientHeight * 0.45
+      );
+      if (Math.abs(scrollEl.scrollTop - alignedTop) > 4) {
+        scrollEl.scrollTo({ top: alignedTop, behavior: 'auto' });
+      }
+    });
+
+    ro.observe(pagesEl);
+    return () => {
+      ro.disconnect();
+      scrollEl.removeEventListener('wheel', cancelActiveTarget);
+      scrollEl.removeEventListener('touchstart', cancelActiveTarget);
+    };
+  }, [pdfProxy]);
 
   const navigateToHighlight = (hl: HighlightRect, matchIdx: number) => {
     const scrollEl = scrollContainerRef.current;
@@ -314,6 +375,10 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
         `[data-testid="pdf-page-${hl.pageIndex + 1}"]`
       ) as HTMLElement | null;
       if (pageEl) {
+        activeScrollTargetRef.current = {
+          highlight: hl,
+          expiresAt: Date.now() + 950,
+        };
         const targetY =
           pageEl.offsetTop + hl.yCenter * pageEl.offsetHeight - scrollEl.clientHeight * 0.45;
         scrollEl.scrollTo({
@@ -329,6 +394,8 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
 
   const handleStepFilterNav = (direction: 'prev' | 'next') => {
     if (filteredHighlights.length === 0) return;
+    setIsMenuOpen(false);
+    setIsColorPickerOpen(false);
     const nextIdx = stepFilteredNavigationFromHighlight(
       filteredHighlights,
       activeVariant?.highlights ?? [],
@@ -344,6 +411,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const handleSelectHighlightOnPage = (toolbarId: string | null, tappedId?: string | null) => {
     setSelectedHighlightId(toolbarId);
     if (tappedId) {
+      activeScrollTargetRef.current = null;
       setFocusedHighlightId(tappedId);
       const matchIdx = filteredHighlights.findIndex((h) => h.id === tappedId);
       setNavIndex(matchIdx);
@@ -456,7 +524,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       <div
         ref={scrollContainerRef}
         data-testid="pdf-scroll-container"
-        className="flex-1 overflow-y-scroll overflow-x-hidden bg-neutral-900 pb-12"
+        className="relative flex-1 overflow-y-scroll overflow-x-hidden bg-neutral-900 pb-12"
         style={{ touchAction: 'pan-y' }}
       >
         {loadError ? (
@@ -477,7 +545,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
             <p className="text-sm text-slate-400">Loading PDF...</p>
           </div>
         ) : (
-          <div className="flex flex-col items-stretch w-full">
+          <div ref={pagesContainerRef} className="flex flex-col items-stretch w-full">
             {pageNumbers.map((pageNum, idx) => (
               <PdfPageCanvas
                 key={`${documentRecord.id}-p${pageNum}`}
@@ -485,6 +553,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                 pageNumber={pageNum}
                 pageIndex={idx}
                 targetWidth={containerWidth}
+                defaultAspectRatio={defaultPageAspectRatio}
                 opacity={documentRecord.opacity}
                 greyscale={documentRecord.greyscale}
                 activeHighlightColor={activeColor}
@@ -608,8 +677,8 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                             selected
                               ? 'ring-2 ring-white ring-offset-1 ring-offset-slate-900 scale-105'
                               : filterSelectedColors === null
-                                ? 'opacity-90'
-                                : 'opacity-35 hover:opacity-80'
+                                ? 'opacity-95 ring-1 ring-white/10'
+                                : 'opacity-35 ring-1 ring-white/10 hover:opacity-85'
                           }`}
                         >
                           {selected && (
@@ -697,8 +766,10 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                         key={hl.id}
                         type="button"
                         onClick={() => navigateToHighlight(hl, idx)}
-                        className={`w-full px-3.5 py-2.5 flex items-center justify-between gap-2.5 text-left transition-colors ${
-                          isCurrent ? 'bg-slate-800/90' : 'hover:bg-slate-800/50'
+                        className={`w-full px-3.5 py-2.5 flex items-center justify-between gap-2.5 text-left transition-colors border-l-2 ${
+                          isCurrent
+                            ? 'bg-slate-800/90 border-l-amber-400'
+                            : 'border-l-transparent hover:bg-slate-800/50'
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">

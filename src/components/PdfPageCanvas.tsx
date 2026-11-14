@@ -19,6 +19,7 @@ interface PdfPageCanvasProps {
   pageNumber: number; // 1-indexed
   pageIndex: number; // 0-indexed
   targetWidth: number;
+  defaultAspectRatio?: number;
   opacity: number;
   greyscale: boolean;
   activeHighlightColor: string;
@@ -62,6 +63,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
   pageNumber,
   pageIndex,
   targetWidth,
+  defaultAspectRatio = 0.7727,
   opacity,
   greyscale,
   activeHighlightColor,
@@ -91,7 +93,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
   const lastTapRef = useRef<TapPoint | null>(null);
 
   const [isNearViewport, setIsNearViewport] = useState<boolean>(pageNumber <= 3);
-  const [aspectRatio, setAspectRatio] = useState<number>(0.7727);
+  const [aspectRatio, setAspectRatio] = useState<number>(defaultAspectRatio);
   const [renderTick, setRenderTick] = useState(0);
   const [draftHighlight, setDraftHighlight] = useState<HighlightRect | null>(null);
 
@@ -466,11 +468,19 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         const isFocused = focusedHighlightId === hl.id;
         const currentStars = normalizeHighlightStars(hl.stars);
         const placeBelow = hl.yCenter < 0.14;
+        const xCenter = (hl.xStart + hl.xEnd) / 2;
+        const horizontalAlignClass =
+          xCenter < 0.18
+            ? 'left-0'
+            : xCenter > 0.82
+              ? 'right-0'
+              : 'left-1/2 -translate-x-1/2';
 
         return (
           <div
             key={hl.id}
             data-testid="highlight-overlay-item"
+            data-highlight-id={hl.id}
             data-stars={currentStars}
             style={{
               left: `${hl.xStart * 100}%`,
@@ -492,7 +502,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
                 onPointerDown={(ev) => ev.stopPropagation()}
                 onPointerUp={(ev) => ev.stopPropagation()}
                 onClick={(ev) => ev.stopPropagation()}
-                className={`pointer-events-auto absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-950/95 border border-slate-700 shadow-xl backdrop-blur-md whitespace-nowrap ${
+                className={`pointer-events-auto absolute z-30 flex items-center gap-0.5 px-2 py-1 rounded-xl bg-slate-950/95 border border-slate-700/90 shadow-2xl backdrop-blur-md whitespace-nowrap ${horizontalAlignClass} ${
                   placeBelow ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
                 }`}
               >
