@@ -359,6 +359,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     HIGHLIGHT_COLORS[0];
 
   return (
+    <>
     <div
       data-testid="landscape-reader"
       data-orientation="landscape"
@@ -819,14 +820,6 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
         </div>
       </footer>
 
-      {/* Camera Capture & Crop Screen */}
-      <CameraCropModal
-        isOpen={isCameraOpen}
-        isRotatedLandscape={isPortraitViewport}
-        onClose={() => setIsCameraOpen(false)}
-        onConfirmCroppedFile={handleCroppedCameraFile}
-      />
-
       {/* Image Pin Lightbox Modal */}
       {activePin && (
         <div
@@ -840,7 +833,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
             onClick={(ev) => ev.stopPropagation()}
             className="relative max-w-4xl w-full max-h-full bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
           >
-            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-800 bg-slate-950/80">
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-slate-800 bg-slate-950/80 shrink-0">
               <span className="text-xs font-medium text-slate-200 truncate">
                 {activePin.originalName}
               </span>
@@ -871,14 +864,14 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 flex items-center justify-center p-4 bg-neutral-950">
+            <div className="flex-1 min-h-0 flex items-center justify-center p-2 sm:p-4 bg-neutral-950 overflow-hidden">
               {isPinLoading ? (
                 <p className="text-xs text-slate-400">Loading image...</p>
               ) : activePinUrl ? (
                 <img
                   src={activePinUrl}
                   alt={activePin.originalName}
-                  className="max-w-full max-h-[75vh] object-contain rounded-lg"
+                  className="max-w-full max-h-full object-contain rounded-lg"
                 />
               ) : (
                 <p className="text-xs text-red-300">
@@ -890,5 +883,13 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
         </div>
       )}
     </div>
+
+    {/* Camera Capture & Crop Screen (always upright in natural portrait/viewport orientation) */}
+    <CameraCropModal
+      isOpen={isCameraOpen}
+      onClose={() => setIsCameraOpen(false)}
+      onConfirmCroppedFile={handleCroppedCameraFile}
+    />
+    </>
   );
 };
