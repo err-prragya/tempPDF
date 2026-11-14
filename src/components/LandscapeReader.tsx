@@ -508,11 +508,14 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           <div
             role="dialog"
             aria-label="Filter and navigate highlights"
-            style={{ maxHeight: `${Math.max(200, landscapeHeight - 116)}px` }}
-            className="absolute bottom-11 right-0 w-80 sm:w-96 bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl z-40 flex flex-col overflow-hidden"
+            style={{
+              maxHeight: `${Math.min(460, Math.max(220, landscapeHeight - 102))}px`,
+              maxWidth: `${Math.max(300, landscapeWidth - 24)}px`,
+            }}
+            className="absolute bottom-11 right-0 w-[540px] sm:w-[600px] bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl z-40 flex flex-col overflow-hidden"
           >
             {/* Header */}
-            <div className="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+            <div className="px-3.5 sm:px-4 py-2 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-xs font-semibold text-white">Filter Highlights</span>
                 <span className="px-1.5 py-0.5 rounded bg-slate-800 text-[11px] font-mono-num text-amber-400">
@@ -527,7 +530,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                       setFilterSelectedColors(null);
                       setFilterSelectedStars(null);
                     }}
-                    className="px-2 py-1 text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 rounded transition-colors"
+                    className="px-2 py-0.5 text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 rounded transition-colors"
                   >
                     Reset
                   </button>
@@ -543,164 +546,179 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
               </div>
             </div>
 
-            {/* Color + Star Multi-Select Filters */}
-            <div className="px-3.5 py-2.5 border-b border-slate-800 space-y-2.5 shrink-0">
-              {/* Colors */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-slate-400">Colors</span>
-                  <button
-                    type="button"
-                    aria-label="Select all highlight colors"
-                    aria-pressed={filterSelectedColors === null}
-                    onClick={() => setFilterSelectedColors(null)}
-                    className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
-                      filterSelectedColors === null
-                        ? 'bg-amber-400 text-slate-950 font-semibold'
-                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                    }`}
-                  >
-                    All
-                  </button>
-                </div>
-                <div className="grid grid-cols-10 gap-1.5">
-                  {HIGHLIGHT_COLORS.map((c) => {
-                    const selected =
-                      filterSelectedColors !== null &&
-                      filterSelectedColors.some(
-                        (hex) => hex.toLowerCase() === c.hex.toLowerCase()
-                      );
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        aria-label={`Filter color ${c.name}`}
-                        aria-pressed={selected}
-                        title={c.name}
-                        onClick={() =>
-                          setFilterSelectedColors((prev) =>
-                            toggleColorFilter(prev, c.hex, HIGHLIGHT_COLORS.length)
-                          )
-                        }
-                        style={{ backgroundColor: c.hex }}
-                        className={`w-6 h-6 rounded-md flex items-center justify-center transition-transform hover:scale-105 ${
-                          selected
-                            ? 'ring-2 ring-white ring-offset-1 ring-offset-slate-900 scale-105'
-                            : filterSelectedColors === null
-                              ? 'opacity-90'
-                              : 'opacity-35 hover:opacity-80'
-                        }`}
-                      >
-                        {selected && (
-                          <Check className="w-3.5 h-3.5 text-slate-950 stroke-[2.5]" aria-hidden="true" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Stars */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-slate-400">Stars</span>
-                  <button
-                    type="button"
-                    aria-label="Select all star ratings"
-                    aria-pressed={filterSelectedStars === null}
-                    onClick={() => setFilterSelectedStars(null)}
-                    className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
-                      filterSelectedStars === null
-                        ? 'bg-amber-400 text-slate-950 font-semibold'
-                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                    }`}
-                  >
-                    All
-                  </button>
-                </div>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {[1, 2, 3, 4, 5].map((starVal) => {
-                    const selected =
-                      filterSelectedStars !== null && filterSelectedStars.includes(starVal);
-                    return (
-                      <button
-                        key={starVal}
-                        type="button"
-                        aria-label={`Filter ${starVal} ${starVal === 1 ? 'star' : 'stars'}`}
-                        aria-pressed={selected}
-                        onClick={() =>
-                          setFilterSelectedStars((prev) => toggleStarFilter(prev, starVal))
-                        }
-                        className={`inline-flex items-center justify-center gap-1 py-1 text-xs font-medium rounded-md border transition-colors ${
-                          selected
-                            ? 'bg-amber-400 text-slate-950 border-amber-400 font-semibold'
-                            : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
-                        }`}
-                      >
-                        <span>{starVal}</span>
-                        <Star
-                          className={`w-3 h-3 ${
-                            selected
-                              ? 'fill-slate-950 text-slate-950'
-                              : 'fill-amber-400 text-amber-400'
-                          }`}
-                          aria-hidden="true"
-                        />
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Matching Results List with Page Number */}
-            <div
-              aria-label="Filtered highlights"
-              className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-800/80"
-            >
-              {filteredHighlights.length === 0 ? (
-                <div className="px-4 py-6 text-center text-xs text-slate-400">
-                  No highlights match the selected colors and stars.
-                </div>
-              ) : (
-                filteredHighlights.map((hl, idx) => {
-                  const stars = normalizeHighlightStars(hl.stars);
-                  const isCurrent = hl.id === focusedHighlightId;
-                  return (
+            {/* Wide 2-Column Body: 4x5 Color Palette + Stars (left) | Highlight List (right) */}
+            <div className="flex flex-1 min-h-0 overflow-hidden">
+              {/* Left Column: 4x5 Colors + Stars */}
+              <div className="w-[208px] sm:w-[244px] shrink-0 p-2.5 sm:p-3 border-r border-slate-800 overflow-y-auto space-y-2 sm:space-y-3">
+                {/* 4x5 Colors */}
+                <div className="space-y-1 sm:space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-slate-400">Colors</span>
                     <button
-                      key={hl.id}
                       type="button"
-                      onClick={() => navigateToHighlight(hl, idx)}
-                      className={`w-full px-3.5 py-2.5 flex items-center justify-between gap-3 text-left transition-colors ${
-                        isCurrent ? 'bg-slate-800/90' : 'hover:bg-slate-800/50'
+                      aria-label="Select all highlight colors"
+                      aria-pressed={filterSelectedColors === null}
+                      onClick={() => setFilterSelectedColors(null)}
+                      className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                        filterSelectedColors === null
+                          ? 'bg-amber-400 text-slate-950 font-semibold'
+                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span
-                          className="w-3.5 h-3.5 rounded-full border border-white/30 shrink-0"
-                          style={{ backgroundColor: hl.color || DEFAULT_HIGHLIGHT_COLOR }}
-                          aria-hidden="true"
-                        />
-                        <span className="text-xs font-medium text-white">
-                          Page {hl.pageIndex + 1}
-                        </span>
-                        <span className="text-[11px] font-mono-num text-slate-400">
-                          #{idx + 1}
-                        </span>
-                      </div>
-                      <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-amber-400 shrink-0">
-                        {Array.from({ length: stars }, (_, sIdx) => (
+                      All
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {HIGHLIGHT_COLORS.map((c) => {
+                      const selected =
+                        filterSelectedColors !== null &&
+                        filterSelectedColors.some(
+                          (hex) => hex.toLowerCase() === c.hex.toLowerCase()
+                        );
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          aria-label={`Filter color ${c.name}`}
+                          aria-pressed={selected}
+                          title={c.name}
+                          onClick={() =>
+                            setFilterSelectedColors((prev) =>
+                              toggleColorFilter(prev, c.hex, HIGHLIGHT_COLORS.length)
+                            )
+                          }
+                          style={{ backgroundColor: c.hex }}
+                          className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center transition-transform hover:scale-105 ${
+                            selected
+                              ? 'ring-2 ring-white ring-offset-1 ring-offset-slate-900 scale-105'
+                              : filterSelectedColors === null
+                                ? 'opacity-90'
+                                : 'opacity-35 hover:opacity-80'
+                          }`}
+                        >
+                          {selected && (
+                            <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-950 stroke-[2.5]" aria-hidden="true" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Stars */}
+                <div className="space-y-1 sm:space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-slate-400">Stars</span>
+                    <button
+                      type="button"
+                      aria-label="Select all star ratings"
+                      aria-pressed={filterSelectedStars === null}
+                      onClick={() => setFilterSelectedStars(null)}
+                      className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                        filterSelectedStars === null
+                          ? 'bg-amber-400 text-slate-950 font-semibold'
+                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      All
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-5 gap-1">
+                    {[1, 2, 3, 4, 5].map((starVal) => {
+                      const selected =
+                        filterSelectedStars !== null && filterSelectedStars.includes(starVal);
+                      return (
+                        <button
+                          key={starVal}
+                          type="button"
+                          aria-label={`Filter ${starVal} ${starVal === 1 ? 'star' : 'stars'}`}
+                          aria-pressed={selected}
+                          onClick={() =>
+                            setFilterSelectedStars((prev) => toggleStarFilter(prev, starVal))
+                          }
+                          className={`inline-flex items-center justify-center gap-0.5 py-1 text-[11px] font-medium rounded-md border transition-colors ${
+                            selected
+                              ? 'bg-amber-400 text-slate-950 border-amber-400 font-semibold'
+                              : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                          }`}
+                        >
+                          <span>{starVal}</span>
                           <Star
-                            key={sIdx}
-                            className="w-3 h-3 fill-amber-400 text-amber-400"
+                            className={`w-2.5 h-2.5 ${
+                              selected
+                                ? 'fill-slate-950 text-slate-950'
+                                : 'fill-amber-400 text-amber-400'
+                            }`}
                             aria-hidden="true"
                           />
-                        ))}
-                      </span>
-                    </button>
-                  );
-                })
-              )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Scrollable Highlight Results List */}
+              <div
+                aria-label="Filtered highlights"
+                className="flex-1 min-w-0 min-h-0 overflow-y-auto divide-y divide-slate-800/80"
+              >
+                {filteredHighlights.length === 0 ? (
+                  <div className="h-full min-h-[140px] px-4 py-6 flex items-center justify-center text-center text-xs text-slate-400">
+                    No highlights match the selected colors and stars.
+                  </div>
+                ) : (
+                  filteredHighlights.map((hl, idx) => {
+                    const stars = normalizeHighlightStars(hl.stars);
+                    const isCurrent = hl.id === focusedHighlightId;
+                    const hlColor = hl.color || DEFAULT_HIGHLIGHT_COLOR;
+                    const colorMeta =
+                      HIGHLIGHT_COLORS.find(
+                        (c) => c.hex.toLowerCase() === hlColor.toLowerCase()
+                      ) ?? HIGHLIGHT_COLORS[0];
+                    return (
+                      <button
+                        key={hl.id}
+                        type="button"
+                        onClick={() => navigateToHighlight(hl, idx)}
+                        className={`w-full px-3.5 py-2.5 flex items-center justify-between gap-2.5 text-left transition-colors ${
+                          isCurrent ? 'bg-slate-800/90' : 'hover:bg-slate-800/50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span
+                            className="w-3.5 h-3.5 rounded-full border border-white/30 shrink-0"
+                            style={{ backgroundColor: hl.color || DEFAULT_HIGHLIGHT_COLOR }}
+                            aria-hidden="true"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-medium text-white">
+                                Page {hl.pageIndex + 1}
+                              </span>
+                              <span className="text-[11px] font-mono-num text-slate-400">
+                                #{idx + 1}
+                              </span>
+                            </div>
+                            <span className="block text-[11px] text-slate-400 truncate">
+                              {colorMeta.name}
+                            </span>
+                          </div>
+                        </div>
+                        <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-amber-400 shrink-0">
+                          {Array.from({ length: stars }, (_, sIdx) => (
+                            <Star
+                              key={sIdx}
+                              className="w-3 h-3 fill-amber-400 text-amber-400"
+                              aria-hidden="true"
+                            />
+                          ))}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
         )}

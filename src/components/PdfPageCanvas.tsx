@@ -481,18 +481,6 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
                 : ''
             }`}
           >
-            {/* Compact star badge when highlight is rated 2..5 stars (stays subtle when not selected) */}
-            {currentStars > 1 && !isSelected && (
-              <span
-                data-testid="highlight-star-badge"
-                aria-label={`${currentStars} stars`}
-                className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-950/90 text-amber-400 text-[10px] font-semibold leading-none shadow"
-              >
-                <span>{currentStars}</span>
-                <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" aria-hidden="true" />
-              </span>
-            )}
-
             {/* Interactive 1..5 Star Selector + Remove on clicked highlight */}
             {isSelected && (
               <div
