@@ -48,6 +48,12 @@ export function toggleStarFilter(current: number[] | null, star: number): number
   return next;
 }
 
+export function compareHighlightsReadingOrder(a: HighlightRect, b: HighlightRect): number {
+  if (a.pageIndex !== b.pageIndex) return a.pageIndex - b.pageIndex;
+  if (a.yCenter !== b.yCenter) return a.yCenter - b.yCenter;
+  return a.xStart - b.xStart;
+}
+
 export function filterAndSortHighlights(
   highlights: HighlightRect[],
   selectedColors: string[] | null,
@@ -65,11 +71,7 @@ export function filterAndSortHighlights(
       const starOk = !starSet || starSet.has(stars);
       return colorOk && starOk;
     })
-    .sort((a, b) => {
-      if (a.pageIndex !== b.pageIndex) return a.pageIndex - b.pageIndex;
-      if (a.yCenter !== b.yCenter) return a.yCenter - b.yCenter;
-      return a.xStart - b.xStart;
-    });
+    .sort(compareHighlightsReadingOrder);
 }
 
 export function stepFilteredNavigationIndex(
@@ -85,4 +87,40 @@ export function stepFilteredNavigationIndex(
     return (currentIndex + 1) % totalMatches;
   }
   return (currentIndex - 1 + totalMatches) % totalMatches;
+}
+
+export function stepFilteredNavigationFromHighlight(
+  filteredHighlights: HighlightRect[],
+  allHighlights: HighlightRect[],
+  focusedHighlightId: string | null,
+  currentNavIndex: number,
+  direction: 'prev' | 'next'
+): number {
+  const total = filteredHighlights.length;
+  if (total <= 0) return -1;
+
+  if (focusedHighlightId) {
+    const directIdx = filteredHighlights.findIndex((h) => h.id === focusedHighlightId);
+    if (directIdx >= 0) {
+      return stepFilteredNavigationIndex(directIdx, total, direction);
+    }
+
+    const anchor = allHighlights.find((h) => h.id === focusedHighlightId);
+    if (anchor) {
+      if (direction === 'next') {
+        const afterIdx = filteredHighlights.findIndex(
+          (h) => compareHighlightsReadingOrder(h, anchor) > 0
+        );
+        return afterIdx >= 0 ? afterIdx : 0;
+      }
+      for (let i = filteredHighlights.length - 1; i >= 0; i -= 1) {
+        if (compareHighlightsReadingOrder(filteredHighlights[i], anchor) < 0) {
+          return i;
+        }
+      }
+      return total - 1;
+    }
+  }
+
+  return stepFilteredNavigationIndex(currentNavIndex, total, direction);
 }

@@ -5,6 +5,7 @@ import {
   DEFAULT_HIGHLIGHT_STARS,
   filterAndSortHighlights,
   normalizeHighlightStars,
+  stepFilteredNavigationFromHighlight,
   stepFilteredNavigationIndex,
   toggleColorFilter,
   toggleStarFilter,
@@ -102,4 +103,20 @@ test('stepFilteredNavigationIndex wraps cleanly in both directions', () => {
   assert.equal(stepFilteredNavigationIndex(2, 3, 'next'), 0);
   assert.equal(stepFilteredNavigationIndex(0, 3, 'prev'), 2);
   assert.equal(stepFilteredNavigationIndex(1, 3, 'next'), 2);
+});
+
+test('stepFilteredNavigationFromHighlight steps cleanly from any tapped highlight', () => {
+  const h1 = makeHl('h1', 0, 0.2, '#FDE047', 5);
+  const h2 = makeHl('h2', 1, 0.4, '#34D399', 1); // excluded from 5-star filter
+  const h3 = makeHl('h3', 2, 0.6, '#38BDF8', 5);
+  const all = [h1, h2, h3];
+  const filteredFiveStar = [h1, h3];
+
+  // Tapped highlight is in filtered list -> step relative to it
+  assert.equal(stepFilteredNavigationFromHighlight(filteredFiveStar, all, 'h1', -1, 'next'), 1);
+  assert.equal(stepFilteredNavigationFromHighlight(filteredFiveStar, all, 'h1', -1, 'prev'), 1);
+
+  // Tapped highlight is excluded by active filter -> still steps forward/backward from its reading position
+  assert.equal(stepFilteredNavigationFromHighlight(filteredFiveStar, all, 'h2', -1, 'next'), 1);
+  assert.equal(stepFilteredNavigationFromHighlight(filteredFiveStar, all, 'h2', -1, 'prev'), 0);
 });

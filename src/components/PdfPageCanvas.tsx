@@ -32,7 +32,7 @@ interface PdfPageCanvasProps {
   isRotatedLandscape: boolean;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   onAddHighlight: (hl: HighlightRect) => void;
-  onSelectHighlightId: (id: string | null) => void;
+  onSelectHighlightId: (id: string | null, tappedHighlightId?: string | null) => void;
   onUpdateHighlightStars: (id: string, stars: number) => void;
   onRemoveHighlight: (id: string) => void;
   onUndoHighlight: () => void;
@@ -407,7 +407,10 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
               nx <= hl.xEnd &&
               Math.abs(ny - hl.yCenter) <= Math.max(hl.heightRatio * 0.85, 0.015)
           );
-          onSelectHighlightId(hit ? (selectedHighlightId === hit.id ? null : hit.id) : null);
+          onSelectHighlightId(
+            hit ? (selectedHighlightId === hit.id ? null : hit.id) : null,
+            hit ? hit.id : null
+          );
         }
       }
     }

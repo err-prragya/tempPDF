@@ -23,7 +23,7 @@ import { DEFAULT_HIGHLIGHT_COLOR, HIGHLIGHT_COLORS } from '../utils/colors';
 import {
   filterAndSortHighlights,
   normalizeHighlightStars,
-  stepFilteredNavigationIndex,
+  stepFilteredNavigationFromHighlight,
   toggleColorFilter,
   toggleStarFilter,
 } from '../utils/highlightFilter';
@@ -322,15 +322,31 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
         });
       }
     }
+    setSelectedHighlightId(null);
     setNavIndex(matchIdx);
     setFocusedHighlightId(hl.id);
   };
 
   const handleStepFilterNav = (direction: 'prev' | 'next') => {
     if (filteredHighlights.length === 0) return;
-    const nextIdx = stepFilteredNavigationIndex(navIndex, filteredHighlights.length, direction);
+    const nextIdx = stepFilteredNavigationFromHighlight(
+      filteredHighlights,
+      activeVariant?.highlights ?? [],
+      focusedHighlightId,
+      navIndex,
+      direction
+    );
     if (nextIdx >= 0 && filteredHighlights[nextIdx]) {
       navigateToHighlight(filteredHighlights[nextIdx], nextIdx);
+    }
+  };
+
+  const handleSelectHighlightOnPage = (toolbarId: string | null, tappedId?: string | null) => {
+    setSelectedHighlightId(toolbarId);
+    if (tappedId) {
+      setFocusedHighlightId(tappedId);
+      const matchIdx = filteredHighlights.findIndex((h) => h.id === tappedId);
+      setNavIndex(matchIdx);
     }
   };
 
@@ -486,7 +502,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                 isRotatedLandscape={isPortraitViewport}
                 scrollContainerRef={scrollContainerRef}
                 onAddHighlight={onAddHighlight}
-                onSelectHighlightId={setSelectedHighlightId}
+                onSelectHighlightId={handleSelectHighlightOnPage}
                 onUpdateHighlightStars={onUpdateHighlightStars}
                 onRemoveHighlight={onRemoveHighlight}
                 onUndoHighlight={handleUndoTrigger}
