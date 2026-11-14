@@ -42,6 +42,7 @@ export function normalizeDocumentRecord(
             color: h.color || DEFAULT_HIGHLIGHT_COLOR,
           }))
         : [],
+      imagePins: Array.isArray(v.imagePins) ? v.imagePins : [],
     })
   );
 

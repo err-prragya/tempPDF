@@ -207,6 +207,45 @@ export async function writePdfFileToFolder(
   return fileHandle;
 }
 
+export const FOLDER_ASSETS_DIR = '.temppdf-assets';
+
+export async function writeImageAssetToFolder(
+  dirHandle: FileSystemDirectoryHandleWithPerms,
+  assetFileName: string,
+  file: Blob
+): Promise<void> {
+  const assetsDir = await dirHandle.getDirectoryHandle(FOLDER_ASSETS_DIR, { create: true });
+  const fileHandle = await assetsDir.getFileHandle(assetFileName, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(file);
+  await writable.close();
+}
+
+export async function readImageAssetFromFolder(
+  dirHandle: FileSystemDirectoryHandleWithPerms,
+  assetFileName: string
+): Promise<File | null> {
+  try {
+    const assetsDir = await dirHandle.getDirectoryHandle(FOLDER_ASSETS_DIR, { create: false });
+    const fileHandle = await assetsDir.getFileHandle(assetFileName, { create: false });
+    return await fileHandle.getFile();
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteImageAssetFromFolder(
+  dirHandle: FileSystemDirectoryHandleWithPerms,
+  assetFileName: string
+): Promise<void> {
+  try {
+    const assetsDir = await dirHandle.getDirectoryHandle(FOLDER_ASSETS_DIR, { create: false });
+    await assetsDir.removeEntry(assetFileName);
+  } catch {
+    // Ignore if already absent
+  }
+}
+
 export async function deletePdfFromFolder(
   dirHandle: FileSystemDirectoryHandleWithPerms,
   fileName: string,

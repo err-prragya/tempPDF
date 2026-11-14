@@ -1,4 +1,4 @@
-import type { HighlightRect, PdfVariant } from '../types/pdf';
+import type { HighlightRect, ImagePin, PdfDocumentRecord, PdfVariant } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR } from './colors';
 
 export const DEFAULT_HIGHLIGHT_WIDTH = 0.018;
@@ -29,6 +29,7 @@ export function createBaseVariant(now = Date.now()): PdfVariant {
     name: 'Base',
     isBase: true,
     highlights: [],
+    imagePins: [],
     createdAt: now,
   };
 }
@@ -48,6 +49,7 @@ export function createNewVariant(existingVariants: PdfVariant[], now = Date.now(
     name: nextVariantName(existingVariants, 'Variant'),
     isBase: false,
     highlights: [],
+    imagePins: [],
     createdAt: now,
   };
 }
@@ -75,6 +77,11 @@ export function duplicateVariant(
       ...h,
       color: h.color || DEFAULT_HIGHLIGHT_COLOR,
       id: createId('hl'),
+      createdAt: now,
+    })),
+    imagePins: (source.imagePins ?? []).map((pin) => ({
+      ...pin,
+      id: createId('img'),
       createdAt: now,
     })),
     createdAt: now,
@@ -174,4 +181,43 @@ export function deleteVariantAt(
     variants: nextVariants,
     activeVariantIndex: nextActive,
   };
+}
+
+export function addImagePinToVariant(variant: PdfVariant, pin: ImagePin): PdfVariant {
+  if (variant.isBase) {
+    return variant;
+  }
+  const normalizedPin: ImagePin = {
+    ...pin,
+    x: Math.max(0.02, Math.min(0.98, pin.x)),
+    y: Math.max(0.02, Math.min(0.98, pin.y)),
+  };
+  return {
+    ...variant,
+    imagePins: [...(variant.imagePins ?? []), normalizedPin],
+  };
+}
+
+export function removeImagePinFromVariant(variant: PdfVariant, pinId: string): PdfVariant {
+  if (variant.isBase) {
+    return variant;
+  }
+  return {
+    ...variant,
+    imagePins: (variant.imagePins ?? []).filter((p) => p.id !== pinId),
+  };
+}
+
+export function isAssetReferencedInDocuments(
+  documents: PdfDocumentRecord[],
+  assetFileName: string
+): boolean {
+  for (const doc of documents) {
+    for (const variant of doc.variants) {
+      if ((variant.imagePins ?? []).some((pin) => pin.assetFileName === assetFileName)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }

@@ -9,11 +9,23 @@ export interface HighlightRect {
   createdAt: number;
 }
 
+export interface ImagePin {
+  id: string;
+  pageIndex: number;
+  x: number; // Normalized [0..1] horizontal coordinate
+  y: number; // Normalized [0..1] vertical coordinate
+  assetFileName: string; // Stored in .temppdf-assets/ inside the folder
+  originalName: string;
+  mimeType: string;
+  createdAt: number;
+}
+
 export interface PdfVariant {
   id: string;
   name: string;
   isBase: boolean;
   highlights: HighlightRect[];
+  imagePins: ImagePin[];
   createdAt: number;
 }
 

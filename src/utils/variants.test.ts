@@ -12,6 +12,9 @@ import {
   DEFAULT_HIGHLIGHT_WIDTH,
   renameVariantAt,
   undoLastHighlight,
+  addImagePinToVariant,
+  removeImagePinFromVariant,
+  isAssetReferencedInDocuments,
 } from './variants';
 import { HIGHLIGHT_COLORS, hexToRgba } from './colors';
 
@@ -151,4 +154,54 @@ test('clampHighlightWidth uses slimmer default and clamps [0.008..0.048]', () =>
   assert.equal(clampHighlightWidth(0.001), 0.008);
   assert.equal(clampHighlightWidth(0.2), 0.048);
   assert.equal(clampHighlightWidth(0.024), 0.024);
+});
+
+test('image pins respect Base immutability, clamp coordinates, duplicate cleanly, and track asset references', () => {
+  const base = createBaseVariant(1000);
+  const samplePin = {
+    id: 'img_1',
+    pageIndex: 0,
+    x: 1.4,
+    y: -0.2,
+    assetFileName: 'asset_1.png',
+    originalName: 'diagram.png',
+    mimeType: 'image/png',
+    createdAt: 1001,
+  };
+
+  assert.equal(addImagePinToVariant(base, samplePin).imagePins.length, 0);
+
+  const v1 = addImagePinToVariant(createNewVariant([base], 1002), samplePin);
+  assert.equal(v1.imagePins.length, 1);
+  assert.equal(v1.imagePins[0].x, 0.98);
+  assert.equal(v1.imagePins[0].y, 0.02);
+
+  const v1Copy = duplicateVariant(v1, [base, v1], 1003);
+  assert.equal(v1Copy.imagePins.length, 1);
+  assert.notEqual(v1Copy.imagePins[0].id, 'img_1');
+  assert.equal(v1Copy.imagePins[0].assetFileName, 'asset_1.png');
+
+  const doc = {
+    id: 'doc1',
+    name: 'notes.pdf',
+    fileSize: 100,
+    pageCount: 1,
+    addedAt: 1000,
+    greyscale: false,
+    opacity: 1,
+    highlightColor: '#FDE047',
+    highlightWidth: DEFAULT_HIGHLIGHT_WIDTH,
+    activeVariantIndex: 1,
+    variants: [base, v1, v1Copy],
+  };
+
+  assert.equal(isAssetReferencedInDocuments([doc], 'asset_1.png'), true);
+  assert.equal(isAssetReferencedInDocuments([doc], 'other.png'), false);
+
+  const v1Removed = removeImagePinFromVariant(v1, 'img_1');
+  assert.equal(v1Removed.imagePins.length, 0);
+  assert.equal(
+    isAssetReferencedInDocuments([{ ...doc, variants: [base, v1Removed] }], 'asset_1.png'),
+    false
+  );
 });

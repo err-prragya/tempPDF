@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Check,
   Copy,
+  ImagePlus,
   Lock,
   Maximize2,
   Minimize2,
@@ -13,10 +14,11 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { HighlightRect, PdfDocumentRecord } from '../types/pdf';
+import type { HighlightRect, ImagePin, PdfDocumentRecord } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR, HIGHLIGHT_COLORS } from '../utils/colors';
 import { openPdfHandle, type LoadedPdfProxy, type ParsedPdfHandle } from '../utils/pdfLoader';
 import {
+  createId,
   DEFAULT_HIGHLIGHT_WIDTH,
   MAX_HIGHLIGHT_WIDTH,
   MIN_HIGHLIGHT_WIDTH,
@@ -40,6 +42,12 @@ interface LandscapeReaderProps {
   onAddHighlight: (hl: HighlightRect) => void;
   onRemoveHighlight: (hlId: string) => void;
   onUndoHighlight: () => boolean;
+  onSaveImageAsset: (
+    file: File
+  ) => Promise<{ assetFileName: string; originalName: string; mimeType: string }>;
+  onLoadImageAssetUrl: (assetFileName: string) => Promise<string | null>;
+  onAddImagePin: (pin: ImagePin) => void;
+  onRemoveImagePin: (pinId: string) => void;
 }
 
 export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
@@ -59,10 +67,15 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   onAddHighlight,
   onRemoveHighlight,
   onUndoHighlight,
+  onSaveImageAsset,
+  onLoadImageAssetUrl,
+  onAddImagePin,
+  onRemoveImagePin,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
   const navMenuRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const onPagesResolvedRef = useRef(onPagesResolved);
   onPagesResolvedRef.current = onPagesResolved;
 
@@ -84,6 +97,11 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  const [isSavingImage, setIsSavingImage] = useState(false);
+  const [activePin, setActivePin] = useState<ImagePin | null>(null);
+  const [activePinUrl, setActivePinUrl] = useState<string | null>(null);
+  const [isPinLoading, setIsPinLoading] = useState(false);
 
   const isPortraitViewport = viewport.h > viewport.w;
   const landscapeWidth = isPortraitViewport ? viewport.h : viewport.w;
@@ -107,9 +125,9 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     };
   }, []);
 
-  // Close popovers on outside pointerdown or Escape
+  // Close popovers, cancel image placement, or close lightbox on Escape / outside pointerdown
   useEffect(() => {
-    if (!isColorPickerOpen && !isMenuOpen) return;
+    if (!isColorPickerOpen && !isMenuOpen && !pendingImageFile && !activePin) return;
     const handleOutside = (e: PointerEvent) => {
       const target = e.target as Node;
       if (isColorPickerOpen && colorPickerRef.current && !colorPickerRef.current.contains(target)) {
@@ -123,6 +141,8 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       if (e.key === 'Escape') {
         setIsColorPickerOpen(false);
         setIsMenuOpen(false);
+        setPendingImageFile(null);
+        setActivePin(null);
       }
     };
     window.addEventListener('pointerdown', handleOutside);
@@ -131,7 +151,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       window.removeEventListener('pointerdown', handleOutside);
       window.removeEventListener('keydown', handleKey);
     };
-  }, [isColorPickerOpen, isMenuOpen]);
+  }, [isColorPickerOpen, isMenuOpen, pendingImageFile, activePin]);
 
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -239,7 +259,64 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
 
   useEffect(() => {
     setIsRenaming(false);
+    setPendingImageFile(null);
+    setActivePin(null);
   }, [safeIndex]);
+
+  useEffect(() => {
+    if (!activePin) {
+      setActivePinUrl(null);
+      setIsPinLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setIsPinLoading(true);
+    setActivePinUrl(null);
+    onLoadImageAssetUrl(activePin.assetFileName)
+      .then((url) => {
+        if (!cancelled) {
+          setActivePinUrl(url);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsPinLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePin, onLoadImageAssetUrl]);
+
+  const handleImageFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setPendingImageFile(file);
+    setIsMenuOpen(false);
+  };
+
+  const handlePlaceImageAt = async (pageIndex: number, nx: number, ny: number) => {
+    if (!pendingImageFile || isBase || isSavingImage) return;
+    const fileToSave = pendingImageFile;
+    setIsSavingImage(true);
+    try {
+      const saved = await onSaveImageAsset(fileToSave);
+      onAddImagePin({
+        id: createId('img'),
+        pageIndex,
+        x: nx,
+        y: ny,
+        assetFileName: saved.assetFileName,
+        originalName: saved.originalName,
+        mimeType: saved.mimeType,
+        createdAt: Date.now(),
+      });
+      setPendingImageFile(null);
+    } finally {
+      setIsSavingImage(false);
+    }
+  };
 
   const startRename = () => {
     if (isBase || !activeVariant) return;
@@ -330,12 +407,18 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                 highlights={(activeVariant?.highlights ?? []).filter(
                   (h) => h.pageIndex === idx
                 )}
+                imagePins={(activeVariant?.imagePins ?? []).filter(
+                  (pin) => pin.pageIndex === idx
+                )}
+                isPlacingImage={Boolean(pendingImageFile) && !isBase}
                 isBase={isBase}
                 isRotatedLandscape={isPortraitViewport}
                 scrollContainerRef={scrollContainerRef}
                 onAddHighlight={onAddHighlight}
                 onRemoveHighlight={onRemoveHighlight}
                 onUndoHighlight={handleUndoTrigger}
+                onPlaceImageAt={handlePlaceImageAt}
+                onOpenImagePin={(pin) => setActivePin(pin)}
                 onBaseEditAttempt={() => setBaseNoticeVisible(true)}
               />
             ))}
@@ -343,11 +426,34 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
         )}
       </div>
 
+      {/* Tap-to-Place Image Banner */}
+      {pendingImageFile && !isBase && (
+        <div
+          role="status"
+          className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-amber-400/70 text-slate-100 text-xs shadow-xl backdrop-blur-md max-w-[90%]"
+        >
+          <ImagePlus className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
+          <span className="truncate">
+            {isSavingImage
+              ? 'Placing image...'
+              : `Tap anywhere on the PDF to place "${pendingImageFile.name}"`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPendingImageFile(null)}
+            disabled={isSavingImage}
+            className="px-2.5 py-1 font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded transition-colors whitespace-nowrap shrink-0"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
       {/* Double-Tap Undo Confirmation */}
       {undoToastMessage && (
         <div
           role="status"
-          className="fixed bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3.5 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
+          className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3.5 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
         >
           <RotateCcw className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
           <span>{undoToastMessage}</span>
@@ -358,10 +464,10 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       {baseNoticeVisible && isBase && (
         <div
           role="status"
-          className="fixed bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
+          className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
         >
           <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
-          <span>Base is read-only. Create a variant to highlight.</span>
+          <span>Base is read-only. Create a variant to highlight or add images.</span>
           <button
             type="button"
             onClick={() => {
@@ -374,6 +480,16 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           </button>
         </div>
       )}
+
+      {/* Hidden Image Picker Input */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleImageFileSelected}
+        className="hidden"
+        aria-label="Select image to attach to PDF"
+      />
 
       {/* Single Compact Bottom Bar: Variants + Highlight Color + Controls Menu */}
       <footer
@@ -581,16 +697,14 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                   </div>
                 </div>
 
-                {/* Variant Actions */}
+                {/* Variant Actions & Image Attachment */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400">
                     <span className="font-medium text-slate-200">Variant</span>
                     <span className="font-mono-num">
                       {isBase
                         ? 'Base · Read-only'
-                        : `${activeVariant.highlights.length} ${
-                            activeVariant.highlights.length === 1 ? 'highlight' : 'highlights'
-                          }`}
+                        : `${activeVariant.highlights.length} hl · ${(activeVariant.imagePins ?? []).length} img`}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -616,6 +730,22 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                     >
                       <Copy className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>Duplicate</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isBase) {
+                          setIsMenuOpen(false);
+                          setBaseNoticeVisible(true);
+                          return;
+                        }
+                        imageInputRef.current?.click();
+                      }}
+                      className="col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
+                    >
+                      <ImagePlus className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
+                      <span>Add Image Pin</span>
                     </button>
 
                     {!isBase && (
@@ -699,6 +829,69 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           </div>
         </div>
       </footer>
+
+      {/* Image Pin Lightbox Modal */}
+      {activePin && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Image preview: ${activePin.originalName}`}
+          onClick={() => setActivePin(null)}
+          className="absolute inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center p-4 sm:p-8"
+        >
+          <div
+            onClick={(ev) => ev.stopPropagation()}
+            className="relative max-w-4xl w-full max-h-full bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
+          >
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-800 bg-slate-950/80">
+              <span className="text-xs font-medium text-slate-200 truncate">
+                {activePin.originalName}
+              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                {!isBase && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetId = activePin.id;
+                      setActivePin(null);
+                      onRemoveImagePin(targetId);
+                    }}
+                    aria-label="Delete image pin"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-red-300 bg-red-950/60 hover:bg-red-900/70 border border-red-900/60 rounded-lg transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Delete</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setActivePin(null)}
+                  aria-label="Close image preview"
+                  className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 flex items-center justify-center p-4 bg-neutral-950">
+              {isPinLoading ? (
+                <p className="text-xs text-slate-400">Loading image...</p>
+              ) : activePinUrl ? (
+                <img
+                  src={activePinUrl}
+                  alt={activePin.originalName}
+                  className="max-w-full max-h-[75vh] object-contain rounded-lg"
+                />
+              ) : (
+                <p className="text-xs text-red-300">
+                  Image file could not be loaded from folder.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

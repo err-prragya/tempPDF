@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { HighlightRect, PdfDocumentRecord } from './types/pdf';
+import type { HighlightRect, ImagePin, PdfDocumentRecord } from './types/pdf';
 import { LibraryView, type FolderMode } from './components/LibraryView';
 import { LandscapeReader } from './components/LandscapeReader';
 import { FOLDER_DATA_FILENAME, serializeFolderMetadata, type FolderMetadataFile } from './utils/folderMetadata';
 import {
   clearSavedFolderHandle,
+  deleteImageAssetFromFolder,
   deletePdfFromFolder,
   isDirectoryPickerSupported,
   loadSavedFolderHandle,
   pickReadWriteFolder,
+  readImageAssetFromFolder,
   scanFallbackDirectoryFiles,
   scanFolderHandle,
   verifyFolderPermission,
   writeFolderMetadata,
+  writeImageAssetToFolder,
   writePdfFileToFolder,
   type FileSystemDirectoryHandleWithPerms,
 } from './utils/folderStorage';
@@ -20,12 +23,16 @@ import { validatePdfHeader } from './utils/pdfLoader';
 import { createSamplePdfBytes } from './utils/samplePdf';
 import {
   addHighlightToVariant,
+  addImagePinToVariant,
   clampHighlightWidth,
   clampOpacity,
+  createId,
   createNewVariant,
   deleteVariantAt,
   duplicateVariant,
+  isAssetReferencedInDocuments,
   removeHighlightFromVariant,
+  removeImagePinFromVariant,
   renameVariantAt,
   undoLastHighlight,
 } from './utils/variants';
@@ -43,11 +50,23 @@ export default function App() {
   const dirHandleRef = useRef<FileSystemDirectoryHandleWithPerms | null>(null);
   const fileHandlesRef = useRef<Record<string, FileSystemFileHandle>>({});
   const fallbackFilesRef = useRef<Record<string, File>>({});
+  const fallbackAssetsRef = useRef<Map<string, Blob>>(new Map());
+  const assetUrlCacheRef = useRef<Map<string, string>>(new Map());
   const metadataRef = useRef<FolderMetadataFile>({
     version: 1,
     updatedAt: Date.now(),
     documents: {},
   });
+
+  useEffect(() => {
+    const cache = assetUrlCacheRef.current;
+    return () => {
+      for (const url of cache.values()) {
+        URL.revokeObjectURL(url);
+      }
+      cache.clear();
+    };
+  }, []);
 
   const applyScannedHandle = useCallback(
     async (handle: FileSystemDirectoryHandleWithPerms) => {
@@ -370,6 +389,9 @@ export default function App() {
     setIsBusy(true);
     setErrorMessage(null);
     try {
+      const candidateAssets = targetDoc.variants.flatMap((v) =>
+        (v.imagePins ?? []).map((p) => p.assetFileName)
+      );
       const remaining = documents.filter((d) => d.id !== docId);
       metadataRef.current = await deletePdfFromFolder(
         handle,
@@ -379,6 +401,7 @@ export default function App() {
       );
       delete fileHandlesRef.current[targetDoc.name];
       setDocuments(remaining);
+      cleanupUnreferencedAssets(candidateAssets, remaining);
       if (activeDocId === docId) {
         setActiveDocId(null);
         setActiveSource(null);
@@ -390,6 +413,74 @@ export default function App() {
       setIsBusy(false);
     }
   };
+
+  const handleSaveImageAsset = useCallback(
+    async (
+      file: File
+    ): Promise<{ assetFileName: string; originalName: string; mimeType: string }> => {
+      const extFromName = file.name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const extFromMime = file.type.split('/')[1]?.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const ext = extFromName || extFromMime || 'png';
+      const assetFileName = `${createId('asset')}.${ext}`;
+
+      if (folderMode === 'readwrite' && dirHandleRef.current) {
+        await writeImageAssetToFolder(dirHandleRef.current, assetFileName, file);
+      } else {
+        fallbackAssetsRef.current.set(assetFileName, file);
+      }
+
+      const objectUrl = URL.createObjectURL(file);
+      assetUrlCacheRef.current.set(assetFileName, objectUrl);
+
+      return {
+        assetFileName,
+        originalName: file.name,
+        mimeType: file.type || 'image/png',
+      };
+    },
+    [folderMode]
+  );
+
+  const handleLoadImageAssetUrl = useCallback(
+    async (assetFileName: string): Promise<string | null> => {
+      const cached = assetUrlCacheRef.current.get(assetFileName);
+      if (cached) return cached;
+
+      let blob: Blob | null = null;
+      if (folderMode === 'readwrite' && dirHandleRef.current) {
+        blob = await readImageAssetFromFolder(dirHandleRef.current, assetFileName);
+      } else {
+        blob = fallbackAssetsRef.current.get(assetFileName) ?? null;
+      }
+
+      if (!blob) return null;
+      const objectUrl = URL.createObjectURL(blob);
+      assetUrlCacheRef.current.set(assetFileName, objectUrl);
+      return objectUrl;
+    },
+    [folderMode]
+  );
+
+  const cleanupUnreferencedAssets = useCallback(
+    (candidateAssetNames: string[], nextDocs: PdfDocumentRecord[]) => {
+      const handle = dirHandleRef.current;
+      for (const assetName of candidateAssetNames) {
+        if (!assetName) continue;
+        if (!isAssetReferencedInDocuments(nextDocs, assetName)) {
+          const cachedUrl = assetUrlCacheRef.current.get(assetName);
+          if (cachedUrl) {
+            URL.revokeObjectURL(cachedUrl);
+            assetUrlCacheRef.current.delete(assetName);
+          }
+          fallbackAssetsRef.current.delete(assetName);
+          if (handle && folderMode === 'readwrite') {
+            deleteImageAssetFromFolder(handle, assetName).catch(() => {});
+          }
+        }
+      }
+    },
+    [folderMode]
+  );
 
   const activeDoc = documents.find((d) => d.id === activeDocId) ?? null;
 
@@ -499,20 +590,24 @@ export default function App() {
             variants: renameVariantAt(doc.variants, index, name),
           }))
         }
-        onDeleteVariant={(index) =>
-          updateActiveDocument((doc) => {
-            const { variants, activeVariantIndex } = deleteVariantAt(
-              doc.variants,
-              index,
-              doc.activeVariantIndex
-            );
-            return {
-              ...doc,
-              variants,
-              activeVariantIndex,
-            };
-          })
-        }
+        onDeleteVariant={(index) => {
+          const targetVar = activeDoc.variants[index];
+          const candidateAssets = (targetVar?.imagePins ?? []).map((p) => p.assetFileName);
+          setDocuments((prev) => {
+            const nextDocs = prev.map((doc) => {
+              if (doc.id !== activeDocId) return doc;
+              const { variants, activeVariantIndex } = deleteVariantAt(
+                doc.variants,
+                index,
+                doc.activeVariantIndex
+              );
+              return { ...doc, variants, activeVariantIndex };
+            });
+            persistMetadataToFolder(nextDocs);
+            cleanupUnreferencedAssets(candidateAssets, nextDocs);
+            return nextDocs;
+          });
+        }}
         onAddHighlight={(hl: HighlightRect) =>
           updateActiveDocument((doc) => {
             const safeIdx = Math.min(
@@ -542,6 +637,51 @@ export default function App() {
           })
         }
         onUndoHighlight={handleUndoHighlight}
+        onSaveImageAsset={handleSaveImageAsset}
+        onLoadImageAssetUrl={handleLoadImageAssetUrl}
+        onAddImagePin={(pin: ImagePin) =>
+          updateActiveDocument((doc) => {
+            const safeIdx = Math.min(
+              Math.max(0, doc.activeVariantIndex),
+              Math.max(0, doc.variants.length - 1)
+            );
+            return {
+              ...doc,
+              variants: doc.variants.map((v, idx) =>
+                idx === safeIdx ? addImagePinToVariant(v, pin) : v
+              ),
+            };
+          })
+        }
+        onRemoveImagePin={(pinId: string) => {
+          const safeIdx = Math.min(
+            Math.max(0, activeDoc.activeVariantIndex),
+            Math.max(0, activeDoc.variants.length - 1)
+          );
+          const removedPin = (activeDoc.variants[safeIdx]?.imagePins ?? []).find(
+            (p) => p.id === pinId
+          );
+          setDocuments((prev) => {
+            const nextDocs = prev.map((doc) => {
+              if (doc.id !== activeDocId) return doc;
+              const idx = Math.min(
+                Math.max(0, doc.activeVariantIndex),
+                Math.max(0, doc.variants.length - 1)
+              );
+              return {
+                ...doc,
+                variants: doc.variants.map((v, i) =>
+                  i === idx ? removeImagePinFromVariant(v, pinId) : v
+                ),
+              };
+            });
+            persistMetadataToFolder(nextDocs);
+            if (removedPin) {
+              cleanupUnreferencedAssets([removedPin.assetFileName], nextDocs);
+            }
+            return nextDocs;
+          });
+        }}
       />
     );
   }

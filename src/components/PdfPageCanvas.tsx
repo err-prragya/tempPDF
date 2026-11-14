@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
-import type { HighlightRect } from '../types/pdf';
+import { Image as ImageIcon, X } from 'lucide-react';
+import type { HighlightRect, ImagePin } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR, hexToRgba } from '../utils/colors';
 import { withRenderSlot, type LoadedPdfProxy } from '../utils/pdfLoader';
 import {
@@ -23,12 +23,16 @@ interface PdfPageCanvasProps {
   activeHighlightColor: string;
   activeHighlightWidth: number;
   highlights: HighlightRect[];
+  imagePins: ImagePin[];
+  isPlacingImage: boolean;
   isBase: boolean;
   isRotatedLandscape: boolean;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   onAddHighlight: (hl: HighlightRect) => void;
   onRemoveHighlight: (id: string) => void;
   onUndoHighlight: () => void;
+  onPlaceImageAt: (pageIndex: number, nx: number, ny: number) => void;
+  onOpenImagePin: (pin: ImagePin) => void;
   onBaseEditAttempt: () => void;
 }
 
@@ -58,12 +62,16 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
   activeHighlightColor,
   activeHighlightWidth,
   highlights,
+  imagePins,
+  isPlacingImage,
   isBase,
   isRotatedLandscape,
   scrollContainerRef,
   onAddHighlight,
   onRemoveHighlight,
   onUndoHighlight,
+  onPlaceImageAt,
+  onOpenImagePin,
   onBaseEditAttempt,
 }) => {
   const pageContainerRef = useRef<HTMLDivElement>(null);
@@ -361,6 +369,15 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         // ignore
       }
     } else if (state.mode === 'pending' && e.type === 'pointerup') {
+      if (isPlacingImage && !isBase) {
+        lastTapRef.current = null;
+        const nx = state.startLocalX / Math.max(1, state.pageWidth);
+        const ny = state.startLocalY / Math.max(1, state.pageHeight);
+        onPlaceImageAt(pageIndex, nx, ny);
+        dragRef.current = null;
+        return;
+      }
+
       const now = Date.now();
       const currentTap: TapPoint = {
         x: e.clientX,
@@ -411,7 +428,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         touchAction: isRotatedLandscape ? 'none' : 'pan-y',
       }}
       className={`relative bg-white select-none overflow-hidden shadow-sm border-b border-neutral-800/30 ${
-        isBase ? 'cursor-default' : 'cursor-crosshair'
+        isBase ? 'cursor-default' : isPlacingImage ? 'cursor-copy' : 'cursor-crosshair'
       }`}
     >
       {/* Dimmed Whole-PDF Layer controlled by Opacity + Greyscale */}
@@ -472,6 +489,31 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
             </div>
           );
         })}
+
+      {/* Full-opacity (1.0) clickable Image Pin Icons */}
+      {imagePins.map((pin) => (
+        <button
+          key={pin.id}
+          type="button"
+          data-testid="pdf-image-pin"
+          aria-label={`Open image: ${pin.originalName}`}
+          title={pin.originalName}
+          onPointerDown={(ev) => ev.stopPropagation()}
+          onPointerUp={(ev) => ev.stopPropagation()}
+          onClick={(ev) => {
+            ev.stopPropagation();
+            onOpenImagePin(pin);
+          }}
+          style={{
+            left: `${pin.x * 100}%`,
+            top: `${pin.y * 100}%`,
+            opacity: 1,
+          }}
+          className="absolute z-10 -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-slate-900/95 text-amber-400 border border-amber-400/80 shadow-lg flex items-center justify-center hover:scale-110 active:scale-95 transition-transform focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
+        >
+          <ImageIcon className="w-4 h-4" aria-hidden="true" />
+        </button>
+      ))}
     </div>
   );
 };
