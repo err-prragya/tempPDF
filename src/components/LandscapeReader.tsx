@@ -1,21 +1,32 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Camera,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Lock,
   Maximize2,
   Minimize2,
+  MoreVertical,
   Pencil,
   Plus,
   RotateCcw,
   SlidersHorizontal,
+  Star,
   Trash2,
   X,
 } from 'lucide-react';
 import type { HighlightRect, ImagePin, PdfDocumentRecord } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR, HIGHLIGHT_COLORS } from '../utils/colors';
+import {
+  filterAndSortHighlights,
+  normalizeHighlightStars,
+  stepFilteredNavigationIndex,
+  toggleColorFilter,
+  toggleStarFilter,
+} from '../utils/highlightFilter';
 import { openPdfHandle, type LoadedPdfProxy, type ParsedPdfHandle } from '../utils/pdfLoader';
 import {
   createId,
@@ -41,6 +52,7 @@ interface LandscapeReaderProps {
   onRenameVariant: (index: number, name: string) => void;
   onDeleteVariant: (index: number) => void;
   onAddHighlight: (hl: HighlightRect) => void;
+  onUpdateHighlightStars: (hlId: string, stars: number) => void;
   onRemoveHighlight: (hlId: string) => void;
   onUndoHighlight: () => boolean;
   onSaveImageAsset: (
@@ -66,6 +78,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   onRenameVariant,
   onDeleteVariant,
   onAddHighlight,
+  onUpdateHighlightStars,
   onRemoveHighlight,
   onUndoHighlight,
   onSaveImageAsset,
@@ -76,6 +89,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
   const navMenuRef = useRef<HTMLDivElement>(null);
+  const filterGroupRef = useRef<HTMLDivElement>(null);
   const onPagesResolvedRef = useRef(onPagesResolved);
   onPagesResolvedRef.current = onPagesResolved;
 
@@ -103,6 +117,12 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const [activePin, setActivePin] = useState<ImagePin | null>(null);
   const [activePinUrl, setActivePinUrl] = useState<string | null>(null);
   const [isPinLoading, setIsPinLoading] = useState(false);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [filterSelectedColors, setFilterSelectedColors] = useState<string[] | null>(null);
+  const [filterSelectedStars, setFilterSelectedStars] = useState<number[] | null>(null);
+  const [navIndex, setNavIndex] = useState<number>(-1);
+  const [focusedHighlightId, setFocusedHighlightId] = useState<string | null>(null);
+  const [selectedHighlightId, setSelectedHighlightId] = useState<string | null>(null);
 
   const isPortraitViewport = viewport.h > viewport.w;
   const landscapeWidth = isPortraitViewport ? viewport.h : viewport.w;
@@ -128,7 +148,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
 
   // Close popovers, cancel image placement, or close lightbox on Escape / outside pointerdown
   useEffect(() => {
-    if (!isColorPickerOpen && !isMenuOpen && !pendingImageFile && !activePin) return;
+    if (!isColorPickerOpen && !isMenuOpen && !isFilterOpen && !pendingImageFile && !activePin) return;
     const handleOutside = (e: PointerEvent) => {
       const target = e.target as Node;
       if (isColorPickerOpen && colorPickerRef.current && !colorPickerRef.current.contains(target)) {
@@ -137,11 +157,15 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       if (isMenuOpen && navMenuRef.current && !navMenuRef.current.contains(target)) {
         setIsMenuOpen(false);
       }
+      if (isFilterOpen && filterGroupRef.current && !filterGroupRef.current.contains(target)) {
+        setIsFilterOpen(false);
+      }
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setIsColorPickerOpen(false);
         setIsMenuOpen(false);
+        setIsFilterOpen(false);
         setPendingImageFile(null);
         setActivePin(null);
       }
@@ -152,7 +176,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       window.removeEventListener('pointerdown', handleOutside);
       window.removeEventListener('keydown', handleKey);
     };
-  }, [isColorPickerOpen, isMenuOpen, pendingImageFile, activePin]);
+  }, [isColorPickerOpen, isMenuOpen, isFilterOpen, pendingImageFile, activePin]);
 
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -263,7 +287,52 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     setIsCameraOpen(false);
     setPendingImageFile(null);
     setActivePin(null);
+    setIsFilterOpen(false);
+    setNavIndex(-1);
+    setFocusedHighlightId(null);
+    setSelectedHighlightId(null);
   }, [safeIndex]);
+
+  const filteredHighlights = useMemo(
+    () =>
+      filterAndSortHighlights(
+        activeVariant?.highlights ?? [],
+        filterSelectedColors,
+        filterSelectedStars
+      ),
+    [activeVariant?.highlights, filterSelectedColors, filterSelectedStars]
+  );
+
+  useEffect(() => {
+    setNavIndex(-1);
+  }, [filterSelectedColors, filterSelectedStars]);
+
+  const navigateToHighlight = (hl: HighlightRect, matchIdx: number) => {
+    const scrollEl = scrollContainerRef.current;
+    if (scrollEl) {
+      const pageEl = scrollEl.querySelector(
+        `[data-testid="pdf-page-${hl.pageIndex + 1}"]`
+      ) as HTMLElement | null;
+      if (pageEl) {
+        const targetY =
+          pageEl.offsetTop + hl.yCenter * pageEl.offsetHeight - scrollEl.clientHeight * 0.45;
+        scrollEl.scrollTo({
+          top: Math.max(0, targetY),
+          behavior: 'smooth',
+        });
+      }
+    }
+    setNavIndex(matchIdx);
+    setFocusedHighlightId(hl.id);
+  };
+
+  const handleStepFilterNav = (direction: 'prev' | 'next') => {
+    if (filteredHighlights.length === 0) return;
+    const nextIdx = stepFilteredNavigationIndex(navIndex, filteredHighlights.length, direction);
+    if (nextIdx >= 0 && filteredHighlights[nextIdx]) {
+      navigateToHighlight(filteredHighlights[nextIdx], nextIdx);
+    }
+  };
 
   useEffect(() => {
     if (!activePin) {
@@ -410,11 +479,15 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                 imagePins={(activeVariant?.imagePins ?? []).filter(
                   (pin) => pin.pageIndex === idx
                 )}
+                focusedHighlightId={focusedHighlightId}
+                selectedHighlightId={selectedHighlightId}
                 isPlacingImage={Boolean(pendingImageFile) && !isBase}
                 isBase={isBase}
                 isRotatedLandscape={isPortraitViewport}
                 scrollContainerRef={scrollContainerRef}
                 onAddHighlight={onAddHighlight}
+                onSelectHighlightId={setSelectedHighlightId}
+                onUpdateHighlightStars={onUpdateHighlightStars}
                 onRemoveHighlight={onRemoveHighlight}
                 onUndoHighlight={handleUndoTrigger}
                 onPlaceImageAt={handlePlaceImageAt}
@@ -424,6 +497,263 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
             ))}
           </div>
         )}
+      </div>
+
+      {/* Floating Highlight Filter & Navigation Group (< | ⋮ | >) */}
+      <div
+        ref={filterGroupRef}
+        className="absolute bottom-14 right-3 sm:right-4 z-30"
+      >
+        {isFilterOpen && (
+          <div
+            role="dialog"
+            aria-label="Filter and navigate highlights"
+            style={{ maxHeight: `${Math.max(200, landscapeHeight - 116)}px` }}
+            className="absolute bottom-11 right-0 w-80 sm:w-96 bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl z-40 flex flex-col overflow-hidden"
+          >
+            {/* Header */}
+            <div className="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs font-semibold text-white">Filter Highlights</span>
+                <span className="px-1.5 py-0.5 rounded bg-slate-800 text-[11px] font-mono-num text-amber-400">
+                  {filteredHighlights.length}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                {(filterSelectedColors !== null || filterSelectedStars !== null) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterSelectedColors(null);
+                      setFilterSelectedStars(null);
+                    }}
+                    className="px-2 py-1 text-[11px] font-medium text-slate-300 hover:text-white hover:bg-slate-800 rounded transition-colors"
+                  >
+                    Reset
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsFilterOpen(false)}
+                  aria-label="Close filter panel"
+                  className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+
+            {/* Color + Star Multi-Select Filters */}
+            <div className="px-3.5 py-2.5 border-b border-slate-800 space-y-2.5 shrink-0">
+              {/* Colors */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-slate-400">Colors</span>
+                  <button
+                    type="button"
+                    aria-label="Select all highlight colors"
+                    aria-pressed={filterSelectedColors === null}
+                    onClick={() => setFilterSelectedColors(null)}
+                    className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                      filterSelectedColors === null
+                        ? 'bg-amber-400 text-slate-950 font-semibold'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    All
+                  </button>
+                </div>
+                <div className="grid grid-cols-10 gap-1.5">
+                  {HIGHLIGHT_COLORS.map((c) => {
+                    const selected =
+                      filterSelectedColors !== null &&
+                      filterSelectedColors.some(
+                        (hex) => hex.toLowerCase() === c.hex.toLowerCase()
+                      );
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        aria-label={`Filter color ${c.name}`}
+                        aria-pressed={selected}
+                        title={c.name}
+                        onClick={() =>
+                          setFilterSelectedColors((prev) =>
+                            toggleColorFilter(prev, c.hex, HIGHLIGHT_COLORS.length)
+                          )
+                        }
+                        style={{ backgroundColor: c.hex }}
+                        className={`w-6 h-6 rounded-md flex items-center justify-center transition-transform hover:scale-105 ${
+                          selected
+                            ? 'ring-2 ring-white ring-offset-1 ring-offset-slate-900 scale-105'
+                            : filterSelectedColors === null
+                              ? 'opacity-90'
+                              : 'opacity-35 hover:opacity-80'
+                        }`}
+                      >
+                        {selected && (
+                          <Check className="w-3.5 h-3.5 text-slate-950 stroke-[2.5]" aria-hidden="true" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Stars */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-slate-400">Stars</span>
+                  <button
+                    type="button"
+                    aria-label="Select all star ratings"
+                    aria-pressed={filterSelectedStars === null}
+                    onClick={() => setFilterSelectedStars(null)}
+                    className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                      filterSelectedStars === null
+                        ? 'bg-amber-400 text-slate-950 font-semibold'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    All
+                  </button>
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[1, 2, 3, 4, 5].map((starVal) => {
+                    const selected =
+                      filterSelectedStars !== null && filterSelectedStars.includes(starVal);
+                    return (
+                      <button
+                        key={starVal}
+                        type="button"
+                        aria-label={`Filter ${starVal} ${starVal === 1 ? 'star' : 'stars'}`}
+                        aria-pressed={selected}
+                        onClick={() =>
+                          setFilterSelectedStars((prev) => toggleStarFilter(prev, starVal))
+                        }
+                        className={`inline-flex items-center justify-center gap-1 py-1 text-xs font-medium rounded-md border transition-colors ${
+                          selected
+                            ? 'bg-amber-400 text-slate-950 border-amber-400 font-semibold'
+                            : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                        }`}
+                      >
+                        <span>{starVal}</span>
+                        <Star
+                          className={`w-3 h-3 ${
+                            selected
+                              ? 'fill-slate-950 text-slate-950'
+                              : 'fill-amber-400 text-amber-400'
+                          }`}
+                          aria-hidden="true"
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Matching Results List with Page Number */}
+            <div
+              aria-label="Filtered highlights"
+              className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-800/80"
+            >
+              {filteredHighlights.length === 0 ? (
+                <div className="px-4 py-6 text-center text-xs text-slate-400">
+                  No highlights match the selected colors and stars.
+                </div>
+              ) : (
+                filteredHighlights.map((hl, idx) => {
+                  const stars = normalizeHighlightStars(hl.stars);
+                  const isCurrent = hl.id === focusedHighlightId;
+                  return (
+                    <button
+                      key={hl.id}
+                      type="button"
+                      onClick={() => navigateToHighlight(hl, idx)}
+                      className={`w-full px-3.5 py-2.5 flex items-center justify-between gap-3 text-left transition-colors ${
+                        isCurrent ? 'bg-slate-800/90' : 'hover:bg-slate-800/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span
+                          className="w-3.5 h-3.5 rounded-full border border-white/30 shrink-0"
+                          style={{ backgroundColor: hl.color || DEFAULT_HIGHLIGHT_COLOR }}
+                          aria-hidden="true"
+                        />
+                        <span className="text-xs font-medium text-white">
+                          Page {hl.pageIndex + 1}
+                        </span>
+                        <span className="text-[11px] font-mono-num text-slate-400">
+                          #{idx + 1}
+                        </span>
+                      </div>
+                      <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-amber-400 shrink-0">
+                        {Array.from({ length: stars }, (_, sIdx) => (
+                          <Star
+                            key={sIdx}
+                            className="w-3 h-3 fill-amber-400 text-amber-400"
+                            aria-hidden="true"
+                          />
+                        ))}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        <div
+          role="group"
+          aria-label="Highlight filter navigation"
+          className="inline-flex items-center rounded-xl bg-slate-950/92 backdrop-blur-md border border-slate-700/90 shadow-xl overflow-hidden"
+        >
+          <button
+            type="button"
+            onClick={() => handleStepFilterNav('prev')}
+            disabled={filteredHighlights.length === 0}
+            aria-label="Previous highlight"
+            className="p-2 text-slate-200 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-35 disabled:pointer-events-none"
+          >
+            <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsMenuOpen(false);
+              setIsColorPickerOpen(false);
+              setIsFilterOpen((open) => !open);
+            }}
+            aria-label="Filter highlights"
+            aria-expanded={isFilterOpen}
+            className={`relative p-2 border-x border-slate-800 transition-colors ${
+              isFilterOpen
+                ? 'bg-amber-400 text-slate-950'
+                : 'text-slate-200 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <MoreVertical className="w-4 h-4" aria-hidden="true" />
+            {(filterSelectedColors !== null || filterSelectedStars !== null) && !isFilterOpen && (
+              <span
+                aria-hidden="true"
+                className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400"
+              />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleStepFilterNav('next')}
+            disabled={filteredHighlights.length === 0}
+            aria-label="Next highlight"
+            className="p-2 text-slate-200 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-35 disabled:pointer-events-none"
+          >
+            <ChevronRight className="w-4 h-4" aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       {/* Tap-to-Place Image Banner */}

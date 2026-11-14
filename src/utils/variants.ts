@@ -1,5 +1,6 @@
 import type { HighlightRect, ImagePin, PdfDocumentRecord, PdfVariant } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR } from './colors';
+import { normalizeHighlightStars } from './highlightFilter';
 
 export const DEFAULT_HIGHLIGHT_WIDTH = 0.018;
 export const MIN_HIGHLIGHT_WIDTH = 0.008;
@@ -76,6 +77,7 @@ export function duplicateVariant(
     highlights: source.highlights.map((h) => ({
       ...h,
       color: h.color || DEFAULT_HIGHLIGHT_COLOR,
+      stars: normalizeHighlightStars(h.stars),
       id: createId('hl'),
       createdAt: now,
     })),
@@ -123,11 +125,29 @@ export function addHighlightToVariant(
     yCenter: Math.max(0, Math.min(1, highlight.yCenter)),
     heightRatio: Math.max(0.006, Math.min(0.15, highlight.heightRatio)),
     color: highlight.color || DEFAULT_HIGHLIGHT_COLOR,
+    stars: normalizeHighlightStars(highlight.stars),
   };
 
   return {
     ...variant,
     highlights: [...variant.highlights, normalized],
+  };
+}
+
+export function updateHighlightStarsInVariant(
+  variant: PdfVariant,
+  highlightId: string,
+  stars: number
+): PdfVariant {
+  if (variant.isBase) {
+    return variant;
+  }
+  const normalizedStars = normalizeHighlightStars(stars);
+  return {
+    ...variant,
+    highlights: variant.highlights.map((h) =>
+      h.id === highlightId ? { ...h, stars: normalizedStars } : h
+    ),
   };
 }
 

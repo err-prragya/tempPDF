@@ -6,6 +6,7 @@ export interface HighlightRect {
   yCenter: number; // Normalized [0..1] straight horizontal line center
   heightRatio: number; // Normalized [0..1] line thickness relative to page height
   color: string; // Hex color from the 20-color highlight palette
+  stars?: number; // Rating 1..5 stars (default 1)
   createdAt: number;
 }
 

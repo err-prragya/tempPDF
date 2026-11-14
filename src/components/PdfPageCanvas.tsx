@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Image as ImageIcon, X } from 'lucide-react';
+import { Image as ImageIcon, Star, X } from 'lucide-react';
 import type { HighlightRect, ImagePin } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR, hexToRgba } from '../utils/colors';
+import { normalizeHighlightStars } from '../utils/highlightFilter';
 import { withRenderSlot, type LoadedPdfProxy } from '../utils/pdfLoader';
 import {
   classifyDragGesture,
@@ -24,11 +25,15 @@ interface PdfPageCanvasProps {
   activeHighlightWidth: number;
   highlights: HighlightRect[];
   imagePins: ImagePin[];
+  focusedHighlightId?: string | null;
+  selectedHighlightId?: string | null;
   isPlacingImage: boolean;
   isBase: boolean;
   isRotatedLandscape: boolean;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   onAddHighlight: (hl: HighlightRect) => void;
+  onSelectHighlightId: (id: string | null) => void;
+  onUpdateHighlightStars: (id: string, stars: number) => void;
   onRemoveHighlight: (id: string) => void;
   onUndoHighlight: () => void;
   onPlaceImageAt: (pageIndex: number, nx: number, ny: number) => void;
@@ -63,11 +68,15 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
   activeHighlightWidth,
   highlights,
   imagePins,
+  focusedHighlightId = null,
+  selectedHighlightId = null,
   isPlacingImage,
   isBase,
   isRotatedLandscape,
   scrollContainerRef,
   onAddHighlight,
+  onSelectHighlightId,
+  onUpdateHighlightStars,
   onRemoveHighlight,
   onUndoHighlight,
   onPlaceImageAt,
@@ -85,7 +94,6 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
   const [aspectRatio, setAspectRatio] = useState<number>(0.7727);
   const [renderTick, setRenderTick] = useState(0);
   const [draftHighlight, setDraftHighlight] = useState<HighlightRect | null>(null);
-  const [selectedHighlightId, setSelectedHighlightId] = useState<string | null>(null);
 
   const cssWidth = Math.max(1, Math.round(targetWidth));
   const cssHeight = Math.max(1, Math.round(cssWidth * aspectRatio));
@@ -242,12 +250,6 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
     }
   }, [highlights, draftHighlight, greyscale, renderTick]);
 
-  useEffect(() => {
-    if (isBase) {
-      setSelectedHighlightId(null);
-    }
-  }, [isBase]);
-
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const el = pageContainerRef.current;
@@ -355,6 +357,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         onAddHighlight({
           ...committed,
           color: activeHighlightColor,
+          stars: 1,
           id: `hl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         });
       }
@@ -387,7 +390,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
 
       if (isDoubleTapGesture(lastTapRef.current, currentTap)) {
         lastTapRef.current = null;
-        setSelectedHighlightId(null);
+        onSelectHighlightId(null);
         if (isBase) {
           onBaseEditAttempt();
         } else {
@@ -402,9 +405,9 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
             (hl) =>
               nx >= hl.xStart &&
               nx <= hl.xEnd &&
-              Math.abs(ny - hl.yCenter) <= hl.heightRatio * 0.75
+              Math.abs(ny - hl.yCenter) <= Math.max(hl.heightRatio * 0.85, 0.015)
           );
-          setSelectedHighlightId((prev) => (hit ? (prev === hit.id ? null : hit.id) : null));
+          onSelectHighlightId(hit ? (selectedHighlightId === hit.id ? null : hit.id) : null);
         }
       }
     }
@@ -454,41 +457,95 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         className="absolute inset-0 block pointer-events-none"
       />
 
-      {/* Interactive remove button for tapped/hovered highlight on editable variants */}
-      {!isBase &&
-        highlights.map((hl) => {
-          const isSelected = selectedHighlightId === hl.id;
-          return (
-            <div
-              key={hl.id}
-              style={{
-                left: `${hl.xStart * 100}%`,
-                width: `${(hl.xEnd - hl.xStart) * 100}%`,
-                top: `${(hl.yCenter - hl.heightRatio / 2) * 100}%`,
-                height: `${hl.heightRatio * 100}%`,
-              }}
-              className="group absolute pointer-events-none"
-            >
-              <button
-                type="button"
-                aria-label="Remove highlight"
+      {/* Interactive star rating + remove controls and focus indicator on highlights */}
+      {highlights.map((hl) => {
+        const isSelected = !isBase && selectedHighlightId === hl.id;
+        const isFocused = focusedHighlightId === hl.id;
+        const currentStars = normalizeHighlightStars(hl.stars);
+        const placeBelow = hl.yCenter < 0.14;
+
+        return (
+          <div
+            key={hl.id}
+            data-testid="highlight-overlay-item"
+            data-stars={currentStars}
+            style={{
+              left: `${hl.xStart * 100}%`,
+              width: `${(hl.xEnd - hl.xStart) * 100}%`,
+              top: `${(hl.yCenter - hl.heightRatio / 2) * 100}%`,
+              height: `${hl.heightRatio * 100}%`,
+            }}
+            className={`group absolute pointer-events-none rounded-sm transition-shadow ${
+              isFocused
+                ? 'ring-2 ring-amber-400 shadow-[0_0_0_4px_rgba(251,191,36,0.28)] z-20'
+                : ''
+            }`}
+          >
+            {/* Compact star badge when highlight is rated 2..5 stars (stays subtle when not selected) */}
+            {currentStars > 1 && !isSelected && (
+              <span
+                data-testid="highlight-star-badge"
+                aria-label={`${currentStars} stars`}
+                className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-950/90 text-amber-400 text-[10px] font-semibold leading-none shadow"
+              >
+                <span>{currentStars}</span>
+                <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" aria-hidden="true" />
+              </span>
+            )}
+
+            {/* Interactive 1..5 Star Selector + Remove on clicked highlight */}
+            {isSelected && (
+              <div
+                role="toolbar"
+                aria-label="Highlight rating and actions"
                 onPointerDown={(ev) => ev.stopPropagation()}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  onRemoveHighlight(hl.id);
-                  setSelectedHighlightId(null);
-                }}
-                className={`pointer-events-auto absolute -right-2 -top-2 w-6 h-6 rounded-full bg-slate-900 text-white shadow flex items-center justify-center transition-opacity ${
-                  isSelected
-                    ? 'opacity-100'
-                    : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
+                onPointerUp={(ev) => ev.stopPropagation()}
+                onClick={(ev) => ev.stopPropagation()}
+                className={`pointer-events-auto absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-950/95 border border-slate-700 shadow-xl backdrop-blur-md whitespace-nowrap ${
+                  placeBelow ? 'top-full mt-1.5' : 'bottom-full mb-1.5'
                 }`}
               >
-                <X className="w-3.5 h-3.5" aria-hidden="true" />
-              </button>
-            </div>
-          );
-        })}
+                {[1, 2, 3, 4, 5].map((starValue) => {
+                  const active = starValue <= currentStars;
+                  return (
+                    <button
+                      key={starValue}
+                      type="button"
+                      aria-label={`Set ${starValue} ${starValue === 1 ? 'star' : 'stars'}`}
+                      aria-pressed={currentStars === starValue}
+                      onClick={() => {
+                        onUpdateHighlightStars(hl.id, starValue);
+                      }}
+                      className="p-1 rounded hover:bg-slate-800 transition-colors"
+                    >
+                      <Star
+                        className={`w-4 h-4 ${
+                          active
+                            ? 'fill-amber-400 text-amber-400'
+                            : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  );
+                })}
+                <div className="w-px h-4 bg-slate-700 mx-0.5" aria-hidden="true" />
+                <button
+                  type="button"
+                  aria-label="Remove highlight"
+                  onClick={() => {
+                    onRemoveHighlight(hl.id);
+                    onSelectHighlightId(null);
+                  }}
+                  className="p-1 rounded text-red-300 hover:text-red-200 hover:bg-red-950/70 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* Full-opacity (1.0) clickable Image Pin Icons */}
       {imagePins.map((pin) => (

@@ -144,6 +144,7 @@ export function computeStraightHighlight(params: {
     yCenter,
     heightRatio,
     color,
+    stars: 1,
     createdAt,
   };
 }

@@ -1,5 +1,6 @@
 import type { PdfDocumentRecord } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR } from './colors';
+import { normalizeHighlightStars } from './highlightFilter';
 import {
   clampHighlightWidth,
   clampOpacity,
@@ -40,6 +41,7 @@ export function normalizeDocumentRecord(
         ? v.highlights.map((h) => ({
             ...h,
             color: h.color || DEFAULT_HIGHLIGHT_COLOR,
+            stars: normalizeHighlightStars(h.stars),
           }))
         : [],
       imagePins: Array.isArray(v.imagePins) ? v.imagePins : [],

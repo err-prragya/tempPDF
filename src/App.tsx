@@ -35,6 +35,7 @@ import {
   removeImagePinFromVariant,
   renameVariantAt,
   undoLastHighlight,
+  updateHighlightStarsInVariant,
 } from './utils/variants';
 
 export default function App() {
@@ -618,6 +619,20 @@ export default function App() {
               ...doc,
               variants: doc.variants.map((v, idx) =>
                 idx === safeIdx ? addHighlightToVariant(v, hl) : v
+              ),
+            };
+          })
+        }
+        onUpdateHighlightStars={(hlId: string, stars: number) =>
+          updateActiveDocument((doc) => {
+            const safeIdx = Math.min(
+              Math.max(0, doc.activeVariantIndex),
+              Math.max(0, doc.variants.length - 1)
+            );
+            return {
+              ...doc,
+              variants: doc.variants.map((v, idx) =>
+                idx === safeIdx ? updateHighlightStarsInVariant(v, hlId, stars) : v
               ),
             };
           })
