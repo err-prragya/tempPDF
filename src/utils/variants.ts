@@ -1,9 +1,19 @@
 import type { HighlightRect, PdfVariant } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR } from './colors';
 
+export const DEFAULT_HIGHLIGHT_WIDTH = 0.018;
+export const MIN_HIGHLIGHT_WIDTH = 0.008;
+export const MAX_HIGHLIGHT_WIDTH = 0.048;
+
 export function clampOpacity(value: number): number {
   if (!Number.isFinite(value)) return 1;
   return Math.min(1, Math.max(0.05, Math.round(value * 100) / 100));
+}
+
+export function clampHighlightWidth(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_HIGHLIGHT_WIDTH;
+  const clamped = Math.min(MAX_HIGHLIGHT_WIDTH, Math.max(MIN_HIGHLIGHT_WIDTH, value));
+  return Math.round(clamped * 1000) / 1000;
 }
 
 export function createId(prefix = 'id'): string {
@@ -71,6 +81,21 @@ export function duplicateVariant(
   };
 }
 
+export function renameVariantAt(
+  variants: PdfVariant[],
+  index: number,
+  rawName: string
+): PdfVariant[] {
+  if (index <= 0 || index >= variants.length || variants[index]?.isBase) {
+    return variants;
+  }
+  const trimmed = rawName.trim().slice(0, 48);
+  if (!trimmed) {
+    return variants;
+  }
+  return variants.map((v, idx) => (idx === index ? { ...v, name: trimmed } : v));
+}
+
 export function addHighlightToVariant(
   variant: PdfVariant,
   highlight: HighlightRect
@@ -89,7 +114,7 @@ export function addHighlightToVariant(
     xStart,
     xEnd,
     yCenter: Math.max(0, Math.min(1, highlight.yCenter)),
-    heightRatio: Math.max(0.01, Math.min(0.15, highlight.heightRatio)),
+    heightRatio: Math.max(0.006, Math.min(0.15, highlight.heightRatio)),
     color: highlight.color || DEFAULT_HIGHLIGHT_COLOR,
   };
 

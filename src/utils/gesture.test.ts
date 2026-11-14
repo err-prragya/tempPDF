@@ -43,6 +43,31 @@ test('computeStraightHighlight locks yCenter to startY for a straight horizontal
   assert.equal(hl.yCenter, 0.5);
   assert.equal(hl.heightRatio, 0.05);
 
+  // Default slimmer thickness when heightRatio is omitted
+  const defaultSlim = computeStraightHighlight({
+    pageIndex: 0,
+    startX: 100,
+    currentX: 500,
+    startY: 200,
+    pageWidth: 1000,
+    pageHeight: 600,
+  });
+  assert.ok(defaultSlim);
+  assert.equal(defaultSlim.heightRatio, 0.018);
+
+  // Explicit thin highlight width
+  const thin = computeStraightHighlight({
+    pageIndex: 0,
+    startX: 100,
+    currentX: 500,
+    startY: 200,
+    pageWidth: 1000,
+    pageHeight: 600,
+    heightRatio: 0.008,
+  });
+  assert.ok(thin);
+  assert.equal(thin.heightRatio, 0.008);
+
   // Tiny jitter (< 1.5% width) should not create stray highlight
   const tiny = computeStraightHighlight({
     pageIndex: 0,

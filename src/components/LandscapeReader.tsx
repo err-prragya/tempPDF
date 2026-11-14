@@ -7,6 +7,7 @@ import {
   Lock,
   Maximize2,
   Minimize2,
+  Pencil,
   Plus,
   RotateCcw,
   Trash2,
@@ -14,6 +15,11 @@ import {
 import type { HighlightRect, PdfDocumentRecord } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR, HIGHLIGHT_COLORS } from '../utils/colors';
 import { openPdfHandle, type LoadedPdfProxy, type ParsedPdfHandle } from '../utils/pdfLoader';
+import {
+  DEFAULT_HIGHLIGHT_WIDTH,
+  MAX_HIGHLIGHT_WIDTH,
+  MIN_HIGHLIGHT_WIDTH,
+} from '../utils/variants';
 import { PdfPageCanvas } from './PdfPageCanvas';
 
 interface LandscapeReaderProps {
@@ -24,9 +30,11 @@ interface LandscapeReaderProps {
   onToggleGreyscale: (greyscale: boolean) => void;
   onChangeOpacity: (opacity: number) => void;
   onChangeHighlightColor: (colorHex: string) => void;
+  onChangeHighlightWidth: (widthRatio: number) => void;
   onSelectVariant: (index: number) => void;
   onCreateVariant: () => void;
   onDuplicateVariant: () => void;
+  onRenameVariant: (index: number, name: string) => void;
   onDeleteVariant: (index: number) => void;
   onAddHighlight: (hl: HighlightRect) => void;
   onRemoveHighlight: (hlId: string) => void;
@@ -41,9 +49,11 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   onToggleGreyscale,
   onChangeOpacity,
   onChangeHighlightColor,
+  onChangeHighlightWidth,
   onSelectVariant,
   onCreateVariant,
   onDuplicateVariant,
+  onRenameVariant,
   onDeleteVariant,
   onAddHighlight,
   onRemoveHighlight,
@@ -69,11 +79,14 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const [baseNoticeVisible, setBaseNoticeVisible] = useState(false);
   const [undoToastMessage, setUndoToastMessage] = useState<string | null>(null);
   const [isColorPickerOpen, setIsColorPickerOpen] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState('');
 
   const isPortraitViewport = viewport.h > viewport.w;
   const landscapeWidth = isPortraitViewport ? viewport.h : viewport.w;
   const landscapeHeight = isPortraitViewport ? viewport.w : viewport.h;
   const activeColor = documentRecord.highlightColor || DEFAULT_HIGHLIGHT_COLOR;
+  const activeWidth = documentRecord.highlightWidth ?? DEFAULT_HIGHLIGHT_WIDTH;
 
   // Track viewport resize & fullscreen state
   useEffect(() => {
@@ -210,6 +223,25 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const activeVariant = variants[safeIndex];
   const isBase = activeVariant?.isBase ?? true;
 
+  useEffect(() => {
+    setIsRenaming(false);
+  }, [safeIndex]);
+
+  const startRename = () => {
+    if (isBase || !activeVariant) return;
+    setRenameDraft(activeVariant.name);
+    setIsRenaming(true);
+  };
+
+  const commitRename = () => {
+    if (!isRenaming) return;
+    const trimmed = renameDraft.trim();
+    if (trimmed && trimmed !== activeVariant?.name) {
+      onRenameVariant(safeIndex, trimmed);
+    }
+    setIsRenaming(false);
+  };
+
   const pageNumbers = pdfProxy
     ? Array.from({ length: pdfProxy.numPages }, (_, i) => i + 1)
     : [];
@@ -324,6 +356,23 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
             )}
           </div>
 
+          <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-200 whitespace-nowrap shrink-0">
+            <span>Width</span>
+            <input
+              type="range"
+              aria-label="Highlight width"
+              min={MIN_HIGHLIGHT_WIDTH}
+              max={MAX_HIGHLIGHT_WIDTH}
+              step={0.002}
+              value={activeWidth}
+              onChange={(e) => onChangeHighlightWidth(Number(e.target.value))}
+              className="studio-range w-16 sm:w-20"
+            />
+            <span className="font-mono-num text-xs text-slate-300 w-6 text-right">
+              {Math.round(activeWidth * 1000)}
+            </span>
+          </label>
+
           <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-200 cursor-pointer select-none whitespace-nowrap shrink-0">
             <input
               type="checkbox"
@@ -403,6 +452,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                 opacity={documentRecord.opacity}
                 greyscale={documentRecord.greyscale}
                 activeHighlightColor={activeColor}
+                activeHighlightWidth={activeWidth}
                 highlights={(activeVariant?.highlights ?? []).filter(
                   (h) => h.pageIndex === idx
                 )}
@@ -451,69 +501,102 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
         </div>
       )}
 
-      {/* Fixed Position Bottom Variant Slider Bar */}
+      {/* Fixed Position Bottom Variant Selector Bar */}
       <footer
         aria-label="Variant navigation bar"
-        className="fixed bottom-0 left-0 right-0 h-14 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 px-3 sm:px-5 flex items-center justify-between gap-4"
+        className="fixed bottom-0 left-0 right-0 h-14 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 px-3 sm:px-5 flex items-center justify-between gap-3"
       >
-        <div className="flex items-center gap-2 min-w-0 shrink-0">
-          {isBase && (
-            <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" aria-hidden="true" />
-          )}
-          <span
-            data-testid="active-variant-label"
-            className="font-display text-xs sm:text-sm font-semibold text-white truncate max-w-[140px]"
-          >
-            {activeVariant?.name ?? 'Base'}
-          </span>
-          <span className="hidden sm:inline text-xs text-slate-400 font-mono-num whitespace-nowrap">
+        {/* Left: Variant Names Listed One by One */}
+        <nav
+          aria-label="Variants"
+          className="flex-1 flex items-center gap-1.5 overflow-x-auto min-w-0 py-1"
+        >
+          {variants.map((v, idx) => {
+            const isActive = idx === safeIndex;
+            if (isActive && !v.isBase && isRenaming) {
+              return (
+                <form
+                  key={v.id}
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    commitRename();
+                  }}
+                  className="flex items-center gap-1 shrink-0"
+                >
+                  <input
+                    type="text"
+                    aria-label="Variant name"
+                    autoFocus
+                    maxLength={48}
+                    value={renameDraft}
+                    onChange={(e) => setRenameDraft(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setIsRenaming(false);
+                      }
+                    }}
+                    className="w-32 sm:w-40 px-2.5 py-1 text-xs font-medium text-white bg-slate-900 border border-amber-400 rounded-md focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    aria-label="Save variant name"
+                    onMouseDown={(e) => e.preventDefault()}
+                    className="p-1.5 text-amber-400 hover:text-amber-300 rounded-md"
+                  >
+                    <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </form>
+              );
+            }
+
+            return (
+              <div key={v.id} className="flex items-center shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onSelectVariant(idx)}
+                  aria-label={`Switch to ${v.name}`}
+                  aria-pressed={isActive}
+                  data-testid={isActive ? 'active-variant-label' : undefined}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors whitespace-nowrap shrink-0 min-h-[34px] ${
+                    isActive
+                      ? 'bg-white text-slate-950 font-semibold shadow-sm'
+                      : 'bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  {v.isBase && (
+                    <Lock className="w-3 h-3 opacity-70 shrink-0" aria-hidden="true" />
+                  )}
+                  <span className="truncate max-w-[140px]">{v.name}</span>
+                </button>
+              </div>
+            );
+          })}
+        </nav>
+
+        {/* Right: Active Variant Status, Rename, New, Duplicate, Delete */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <span className="hidden lg:inline text-xs text-slate-400 font-mono-num whitespace-nowrap pr-1">
             {isBase
               ? 'Read-only'
               : `${activeVariant.highlights.length} ${
                   activeVariant.highlights.length === 1 ? 'highlight' : 'highlights'
                 }`}
           </span>
-        </div>
 
-        <div className="flex-1 max-w-xl flex items-center gap-3 min-w-0">
-          <div className="flex-1 flex flex-col justify-center gap-1 min-w-0">
-            <input
-              type="range"
-              aria-label="Navigate PDF variants"
-              min={0}
-              max={Math.max(0, variants.length - 1)}
-              step={1}
-              disabled={variants.length <= 1}
-              value={safeIndex}
-              onChange={(e) => onSelectVariant(Number(e.target.value))}
-              className="studio-range w-full disabled:opacity-40"
-            />
-            {variants.length > 1 && (
-              <div className="hidden md:flex items-center justify-between px-2">
-                {variants.map((v, idx) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    onClick={() => onSelectVariant(idx)}
-                    aria-label={`Switch to ${v.name}`}
-                    className={`text-[10px] font-mono-num transition-colors truncate max-w-[68px] ${
-                      idx === safeIndex
-                        ? 'text-amber-400 font-semibold'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {v.isBase ? 'Base' : `V${idx}`}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <span className="text-[11px] font-mono-num text-slate-400 shrink-0">
-            {variants.length > 1 ? `${safeIndex + 1}/${variants.length}` : '1/1'}
-          </span>
-        </div>
+          {!isBase && !isRenaming && (
+            <button
+              type="button"
+              onClick={startRename}
+              aria-label="Rename variant"
+              title="Rename variant"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-md transition-colors whitespace-nowrap shrink-0 min-h-[34px]"
+            >
+              <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Rename</span>
+            </button>
+          )}
 
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <button
             type="button"
             onClick={onCreateVariant}

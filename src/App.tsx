@@ -14,13 +14,16 @@ import {
 } from './utils/storage';
 import {
   addHighlightToVariant,
+  clampHighlightWidth,
   clampOpacity,
   createBaseVariant,
   createId,
   createNewVariant,
+  DEFAULT_HIGHLIGHT_WIDTH,
   deleteVariantAt,
   duplicateVariant,
   removeHighlightFromVariant,
+  renameVariantAt,
   undoLastHighlight,
 } from './utils/variants';
 
@@ -137,6 +140,7 @@ export default function App() {
           greyscale: false,
           opacity: 1,
           highlightColor: DEFAULT_HIGHLIGHT_COLOR,
+          highlightWidth: DEFAULT_HIGHLIGHT_WIDTH,
           activeVariantIndex: 0,
           variants: [createBaseVariant(now)],
         };
@@ -234,6 +238,12 @@ export default function App() {
         onChangeHighlightColor={(highlightColor) =>
           updateActiveDocument((doc) => ({ ...doc, highlightColor }))
         }
+        onChangeHighlightWidth={(highlightWidth) =>
+          updateActiveDocument((doc) => ({
+            ...doc,
+            highlightWidth: clampHighlightWidth(highlightWidth),
+          }))
+        }
         onSelectVariant={(index) =>
           updateActiveDocument((doc) => ({
             ...doc,
@@ -270,6 +280,12 @@ export default function App() {
               activeVariantIndex: variants.length - 1,
             };
           })
+        }
+        onRenameVariant={(index, name) =>
+          updateActiveDocument((doc) => ({
+            ...doc,
+            variants: renameVariantAt(doc.variants, index, name),
+          }))
         }
         onDeleteVariant={(index) =>
           updateActiveDocument((doc) => {

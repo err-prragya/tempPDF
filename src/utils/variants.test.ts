@@ -8,6 +8,9 @@ import {
   removeHighlightFromVariant,
   deleteVariantAt,
   clampOpacity,
+  clampHighlightWidth,
+  DEFAULT_HIGHLIGHT_WIDTH,
+  renameVariantAt,
   undoLastHighlight,
 } from './variants';
 import { HIGHLIGHT_COLORS, hexToRgba } from './colors';
@@ -126,4 +129,26 @@ test('clampOpacity enforces [0.05..1]', () => {
   assert.equal(clampOpacity(-0.5), 0.05);
   assert.equal(clampOpacity(1.4), 1);
   assert.equal(clampOpacity(0.35), 0.35);
+});
+
+test('renameVariantAt renames editable variants cleanly and refuses Base or blank names', () => {
+  const base = createBaseVariant();
+  const v1 = createNewVariant([base]);
+  const list = [base, v1];
+
+  const renameBase = renameVariantAt(list, 0, 'Custom Base');
+  assert.equal(renameBase[0].name, 'Base');
+
+  const renameBlank = renameVariantAt(list, 1, '   ');
+  assert.equal(renameBlank[1].name, 'Variant 1');
+
+  const renamed = renameVariantAt(list, 1, '  Exam Definitions  ');
+  assert.equal(renamed[1].name, 'Exam Definitions');
+});
+
+test('clampHighlightWidth uses slimmer default and clamps [0.008..0.048]', () => {
+  assert.equal(DEFAULT_HIGHLIGHT_WIDTH, 0.018);
+  assert.equal(clampHighlightWidth(0.001), 0.008);
+  assert.equal(clampHighlightWidth(0.2), 0.048);
+  assert.equal(clampHighlightWidth(0.024), 0.024);
 });

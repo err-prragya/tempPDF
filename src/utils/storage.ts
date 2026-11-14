@@ -1,7 +1,12 @@
 import type { PdfDocumentRecord } from '../types/pdf';
 import { DEFAULT_HIGHLIGHT_COLOR } from './colors';
 import { createSamplePdfBytes } from './samplePdf';
-import { createBaseVariant, createId } from './variants';
+import {
+  clampHighlightWidth,
+  createBaseVariant,
+  createId,
+  DEFAULT_HIGHLIGHT_WIDTH,
+} from './variants';
 
 const DB_NAME = 'tempPDF_db';
 const DB_VERSION = 1;
@@ -30,6 +35,10 @@ function normalizeRecord(doc: PdfDocumentRecord): PdfDocumentRecord {
   return {
     ...doc,
     highlightColor: doc.highlightColor || DEFAULT_HIGHLIGHT_COLOR,
+    highlightWidth:
+      typeof doc.highlightWidth === 'number'
+        ? clampHighlightWidth(doc.highlightWidth)
+        : DEFAULT_HIGHLIGHT_WIDTH,
     variants: doc.variants.map((v) => ({
       ...v,
       highlights: v.highlights.map((h) => ({
@@ -139,6 +148,7 @@ export async function ensureSamplePdfSeeded(): Promise<PdfDocumentRecord[]> {
     greyscale: false,
     opacity: 1,
     highlightColor: DEFAULT_HIGHLIGHT_COLOR,
+    highlightWidth: DEFAULT_HIGHLIGHT_WIDTH,
     activeVariantIndex: 0,
     variants: [createBaseVariant(now)],
     isSample: true,
@@ -161,6 +171,7 @@ export async function restoreSamplePdf(): Promise<PdfDocumentRecord> {
     greyscale: false,
     opacity: 1,
     highlightColor: DEFAULT_HIGHLIGHT_COLOR,
+    highlightWidth: DEFAULT_HIGHLIGHT_WIDTH,
     activeVariantIndex: 0,
     variants: [createBaseVariant(now)],
     isSample: true,

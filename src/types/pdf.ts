@@ -26,6 +26,7 @@ export interface PdfDocumentRecord {
   greyscale: boolean;
   opacity: number; // [0.05..1]
   highlightColor: string; // Active hex color for new highlights
+  highlightWidth: number; // Normalized highlight band thickness [0.008..0.048]
   activeVariantIndex: number;
   variants: PdfVariant[];
   isSample?: boolean;

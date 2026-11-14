@@ -95,6 +95,7 @@ export function computeStraightHighlight(params: {
   pageWidth: number;
   pageHeight: number;
   color?: string;
+  heightRatio?: number;
   bandHeightPx?: number;
   id?: string;
   createdAt?: number;
@@ -107,7 +108,8 @@ export function computeStraightHighlight(params: {
     pageWidth,
     pageHeight,
     color = DEFAULT_HIGHLIGHT_COLOR,
-    bandHeightPx = 28,
+    heightRatio: explicitHeightRatio,
+    bandHeightPx,
     id,
     createdAt = Date.now(),
   } = params;
@@ -126,7 +128,13 @@ export function computeStraightHighlight(params: {
   }
 
   const yCenter = Math.max(0, Math.min(1, startY / pageHeight));
-  const heightRatio = Math.max(0.016, Math.min(0.08, bandHeightPx / pageHeight));
+  const rawRatio =
+    explicitHeightRatio !== undefined
+      ? explicitHeightRatio
+      : bandHeightPx !== undefined
+        ? bandHeightPx / pageHeight
+        : 0.018;
+  const heightRatio = Math.max(0.006, Math.min(0.08, rawRatio));
 
   return {
     id: id ?? createId('hl'),

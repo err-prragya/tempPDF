@@ -21,6 +21,7 @@ interface PdfPageCanvasProps {
   opacity: number;
   greyscale: boolean;
   activeHighlightColor: string;
+  activeHighlightWidth: number;
   highlights: HighlightRect[];
   isBase: boolean;
   isRotatedLandscape: boolean;
@@ -55,6 +56,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
   opacity,
   greyscale,
   activeHighlightColor,
+  activeHighlightWidth,
   highlights,
   isBase,
   isRotatedLandscape,
@@ -205,7 +207,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
     for (const hl of allHighlights) {
       const sx = Math.floor(hl.xStart * w);
       const sw = Math.max(2, Math.ceil((hl.xEnd - hl.xStart) * w));
-      const bandH = Math.max(12, Math.round(hl.heightRatio * h));
+      const bandH = Math.max(6, Math.round(hl.heightRatio * h));
       const sy = Math.max(0, Math.min(h - bandH, Math.round(hl.yCenter * h - bandH / 2)));
       const hlHex = hl.color || DEFAULT_HIGHLIGHT_COLOR;
 
@@ -310,7 +312,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         pageWidth: state.pageWidth,
         pageHeight: state.pageHeight,
         color: activeHighlightColor,
-        bandHeightPx: Math.max(20, Math.round(state.pageHeight * 0.032)),
+        heightRatio: activeHighlightWidth,
         id: 'draft',
       });
       draftHighlightRef.current = preview;
