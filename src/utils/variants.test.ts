@@ -8,7 +8,9 @@ import {
   removeHighlightFromVariant,
   deleteVariantAt,
   clampOpacity,
+  undoLastHighlight,
 } from './variants';
+import { HIGHLIGHT_COLORS, hexToRgba } from './colors';
 
 test('Base variant is immutable to highlight additions and removals', () => {
   const base = createBaseVariant(1000);
@@ -22,11 +24,12 @@ test('Base variant is immutable to highlight additions and removals', () => {
     xEnd: 0.8,
     yCenter: 0.5,
     heightRatio: 0.03,
+    color: '#FDE047',
     createdAt: 1001,
   });
   assert.equal(afterAdd.highlights.length, 0);
 
-  const tamperedBase = { ...base, highlights: [{ id: 'h1', pageIndex: 0, xStart: 0.1, xEnd: 0.5, yCenter: 0.5, heightRatio: 0.03, createdAt: 1 }] };
+  const tamperedBase = { ...base, highlights: [{ id: 'h1', pageIndex: 0, xStart: 0.1, xEnd: 0.5, yCenter: 0.5, heightRatio: 0.03, color: '#FDE047', createdAt: 1 }] };
   const afterRemove = removeHighlightFromVariant(tamperedBase, 'h1');
   assert.equal(afterRemove.highlights.length, 1);
 });
@@ -44,11 +47,13 @@ test('Creating and duplicating variants produces editable variants with clean no
     xEnd: 0.2, // reversed order should normalize
     yCenter: 0.4,
     heightRatio: 0.03,
+    color: '#38BDF8',
     createdAt: 1002,
   });
   assert.equal(v1WithHl.highlights.length, 1);
   assert.equal(v1WithHl.highlights[0].xStart, 0.2);
   assert.equal(v1WithHl.highlights[0].xEnd, 0.7);
+  assert.equal(v1WithHl.highlights[0].color, '#38BDF8');
 
   const v1Copy = duplicateVariant(v1WithHl, [base, v1WithHl], 1003);
   assert.equal(v1Copy.isBase, false);
@@ -60,6 +65,45 @@ test('Creating and duplicating variants produces editable variants with clean no
   const baseCopy = duplicateVariant(base, [base, v1WithHl, v1Copy], 1004);
   assert.equal(baseCopy.isBase, false);
   assert.equal(baseCopy.name, 'Variant 2');
+});
+
+test('undoLastHighlight removes only the latest highlight on editable variants', () => {
+  const base = createBaseVariant();
+  assert.equal(undoLastHighlight(base).removed, null);
+
+  let v1 = createNewVariant([base]);
+  v1 = addHighlightToVariant(v1, {
+    id: 'h1',
+    pageIndex: 0,
+    xStart: 0.1,
+    xEnd: 0.5,
+    yCenter: 0.2,
+    heightRatio: 0.03,
+    color: '#FDE047',
+    createdAt: 1,
+  });
+  v1 = addHighlightToVariant(v1, {
+    id: 'h2',
+    pageIndex: 0,
+    xStart: 0.2,
+    xEnd: 0.8,
+    yCenter: 0.6,
+    heightRatio: 0.03,
+    color: '#F472B6',
+    createdAt: 2,
+  });
+
+  const step1 = undoLastHighlight(v1);
+  assert.equal(step1.removed?.id, 'h2');
+  assert.equal(step1.variant.highlights.length, 1);
+  assert.equal(step1.variant.highlights[0].id, 'h1');
+});
+
+test('HIGHLIGHT_COLORS provides 20 distinct colors and hexToRgba parses cleanly', () => {
+  assert.equal(HIGHLIGHT_COLORS.length, 20);
+  const uniqueHexes = new Set(HIGHLIGHT_COLORS.map((c) => c.hex.toLowerCase()));
+  assert.equal(uniqueHexes.size, 20);
+  assert.equal(hexToRgba('#38BDF8', 0.5), 'rgba(56, 189, 248, 0.5)');
 });
 
 test('deleteVariantAt refuses to delete Base and updates active index safely', () => {

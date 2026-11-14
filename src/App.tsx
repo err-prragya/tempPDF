@@ -2,11 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import type { HighlightRect, PdfDocumentRecord } from './types/pdf';
 import { LibraryView } from './components/LibraryView';
 import { LandscapeReader } from './components/LandscapeReader';
-import { parsePdfBytes } from './utils/pdfLoader';
+import { DEFAULT_HIGHLIGHT_COLOR } from './utils/colors';
+import { validatePdfHeader } from './utils/pdfLoader';
 import {
   deletePdfRecord,
   ensureSamplePdfSeeded,
-  loadPdfBytes,
+  loadPdfBlob,
   restoreSamplePdf,
   saveDocumentRecord,
   savePdfFile,
@@ -20,39 +21,43 @@ import {
   deleteVariantAt,
   duplicateVariant,
   removeHighlightFromVariant,
+  undoLastHighlight,
 } from './utils/variants';
 
 export default function App() {
   const [documents, setDocuments] = useState<PdfDocumentRecord[]>([]);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
-  const [activeBytes, setActiveBytes] = useState<Uint8Array | null>(null);
+  const [activeSource, setActiveSource] = useState<Blob | Uint8Array | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const openDocumentById = useCallback(async (docId: string, requestFs = false) => {
-    if (requestFs && typeof document !== 'undefined') {
-      try {
-        if (!document.fullscreenElement) {
-          document.documentElement.requestFullscreen?.().catch(() => {});
-          const orientation = screen.orientation as ScreenOrientation & {
-            lock?: (type: string) => Promise<void>;
-          };
-          orientation?.lock?.('landscape').catch(() => {});
+  const openDocumentById = useCallback(
+    async (docId: string, requestFs = false, preloadedSource?: Blob | Uint8Array) => {
+      if (requestFs && typeof document !== 'undefined') {
+        try {
+          if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen?.().catch(() => {});
+            const orientation = screen.orientation as ScreenOrientation & {
+              lock?: (type: string) => Promise<void>;
+            };
+            orientation?.lock?.('landscape').catch(() => {});
+          }
+        } catch {
+          // Ignore if fullscreen is blocked outside user gesture or in iframe
         }
-      } catch {
-        // Ignore if fullscreen is blocked outside user gesture or in iframe
       }
-    }
 
-    const bytes = await loadPdfBytes(docId);
-    if (!bytes) {
-      setErrorMessage('Could not load the stored PDF data. Try re-importing the file.');
-      return;
-    }
-    setActiveBytes(bytes);
-    setActiveDocId(docId);
-  }, []);
+      const source = preloadedSource ?? (await loadPdfBlob(docId));
+      if (!source) {
+        setErrorMessage('Could not load the stored PDF data. Try re-importing the file.');
+        return;
+      }
+      setActiveSource(source);
+      setActiveDocId(docId);
+    },
+    []
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -106,7 +111,7 @@ export default function App() {
 
     try {
       const newlyAdded: PdfDocumentRecord[] = [];
-      let lastImportedId: string | null = null;
+      let lastImported: { record: PdfDocumentRecord; file: File } | null = null;
 
       for (const file of files) {
         const isPdfMime = file.type === 'application/pdf';
@@ -116,42 +121,41 @@ export default function App() {
           continue;
         }
 
-        const arrayBuffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-
-        // Validate PDF structure and page count via pdfjs-dist
-        const parsed = await parsePdfBytes(bytes);
-        const pageCount = parsed.numPages;
-        await parsed.cleanup();
+        const hasHeader = await validatePdfHeader(file);
+        if (!hasHeader) {
+          setErrorMessage(`"${file.name}" does not appear to be a valid PDF document.`);
+          continue;
+        }
 
         const now = Date.now();
         const record: PdfDocumentRecord = {
           id: createId('pdf'),
           name: file.name,
           fileSize: file.size,
-          pageCount,
+          pageCount: 1, // Updated automatically once LandscapeReader resolves pdf.numPages
           addedAt: now,
           greyscale: false,
           opacity: 1,
+          highlightColor: DEFAULT_HIGHLIGHT_COLOR,
           activeVariantIndex: 0,
           variants: [createBaseVariant(now)],
         };
 
-        await savePdfFile(record, bytes);
+        // Persist Blob without duplicate full-file parsing or extra memory copies
+        await savePdfFile(record, file);
         newlyAdded.push(record);
-        lastImportedId = record.id;
+        lastImported = { record, file };
       }
 
       if (newlyAdded.length > 0) {
         setDocuments((prev) => [...newlyAdded.reverse(), ...prev]);
-        // Automatically open newly imported PDF in landscape full-screen reader
-        if (files.length === 1 && lastImportedId) {
-          await openDocumentById(lastImportedId, true);
+        if (files.length === 1 && lastImported) {
+          await openDocumentById(lastImported.record.id, true, lastImported.file);
         }
       }
     } catch (err) {
       console.error('PDF import failed:', err);
-      setErrorMessage('Could not parse the selected PDF file. Please verify it is a valid, unencrypted PDF.');
+      setErrorMessage('Could not import the selected PDF file. Please try again.');
     } finally {
       setIsImporting(false);
     }
@@ -162,7 +166,7 @@ export default function App() {
     setDocuments((prev) => prev.filter((d) => d.id !== docId));
     if (activeDocId === docId) {
       setActiveDocId(null);
-      setActiveBytes(null);
+      setActiveSource(null);
     }
   };
 
@@ -173,6 +177,32 @@ export default function App() {
 
   const activeDoc = documents.find((d) => d.id === activeDocId) ?? null;
 
+  const handleUndoHighlight = (): boolean => {
+    if (!activeDoc) return false;
+    const safeIdx = Math.min(
+      Math.max(0, activeDoc.activeVariantIndex),
+      Math.max(0, activeDoc.variants.length - 1)
+    );
+    const activeVar = activeDoc.variants[safeIdx];
+    if (!activeVar || activeVar.isBase || activeVar.highlights.length === 0) {
+      return false;
+    }
+
+    updateActiveDocument((doc) => {
+      const idx = Math.min(
+        Math.max(0, doc.activeVariantIndex),
+        Math.max(0, doc.variants.length - 1)
+      );
+      return {
+        ...doc,
+        variants: doc.variants.map((v, i) =>
+          i === idx ? undoLastHighlight(v).variant : v
+        ),
+      };
+    });
+    return true;
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -181,20 +211,28 @@ export default function App() {
     );
   }
 
-  if (activeDoc && activeBytes) {
+  if (activeDoc && activeSource) {
     return (
       <LandscapeReader
         documentRecord={activeDoc}
-        pdfBytes={activeBytes}
+        pdfSource={activeSource}
         onExit={() => {
           setActiveDocId(null);
-          setActiveBytes(null);
+          setActiveSource(null);
+        }}
+        onPagesResolved={(numPages) => {
+          if (activeDoc.pageCount !== numPages) {
+            updateActiveDocument((doc) => ({ ...doc, pageCount: numPages }));
+          }
         }}
         onToggleGreyscale={(greyscale) =>
           updateActiveDocument((doc) => ({ ...doc, greyscale }))
         }
         onChangeOpacity={(opacity) =>
           updateActiveDocument((doc) => ({ ...doc, opacity: clampOpacity(opacity) }))
+        }
+        onChangeHighlightColor={(highlightColor) =>
+          updateActiveDocument((doc) => ({ ...doc, highlightColor }))
         }
         onSelectVariant={(index) =>
           updateActiveDocument((doc) => ({
@@ -275,6 +313,7 @@ export default function App() {
             };
           })
         }
+        onUndoHighlight={handleUndoHighlight}
       />
     );
   }

@@ -3,10 +3,19 @@ import assert from 'node:assert/strict';
 import {
   classifyDragGesture,
   computeStraightHighlight,
+  isDoubleTapGesture,
   mapClientDeltaToLocal,
   mapClientPointToLocal,
 } from './gesture';
 import { createSamplePdfBytes } from './samplePdf';
+
+test('isDoubleTapGesture detects two rapid nearby taps and rejects slow or distant taps', () => {
+  const first = { x: 200, y: 300, time: 1000 };
+  assert.equal(isDoubleTapGesture(null, first), false);
+  assert.equal(isDoubleTapGesture(first, { x: 210, y: 310, time: 1220 }), true);
+  assert.equal(isDoubleTapGesture(first, { x: 205, y: 305, time: 1500 }), false);
+  assert.equal(isDoubleTapGesture(first, { x: 320, y: 300, time: 1150 }), false);
+});
 
 test('classifyDragGesture distinguishes horizontal highlight from vertical scroll', () => {
   assert.equal(classifyDragGesture(3, 2), 'pending');

@@ -1,13 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { HighlightRect } from '../types/pdf';
-import type { LoadedPdfProxy } from '../utils/pdfLoader';
+import { DEFAULT_HIGHLIGHT_COLOR, hexToRgba } from '../utils/colors';
+import { withRenderSlot, type LoadedPdfProxy } from '../utils/pdfLoader';
 import {
   classifyDragGesture,
   computeStraightHighlight,
+  isDoubleTapGesture,
   mapClientDeltaToLocal,
   mapClientPointToLocal,
   type DragGestureMode,
+  type TapPoint,
 } from '../utils/gesture';
 
 interface PdfPageCanvasProps {
@@ -17,12 +20,14 @@ interface PdfPageCanvasProps {
   targetWidth: number;
   opacity: number;
   greyscale: boolean;
+  activeHighlightColor: string;
   highlights: HighlightRect[];
   isBase: boolean;
   isRotatedLandscape: boolean;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
   onAddHighlight: (hl: HighlightRect) => void;
   onRemoveHighlight: (id: string) => void;
+  onUndoHighlight: () => void;
   onBaseEditAttempt: () => void;
 }
 
@@ -40,6 +45,8 @@ interface DragState {
   mode: DragGestureMode | 'blocked';
 }
 
+const MAX_CANVAS_PIXEL_WIDTH = 2200;
+
 export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
   pdf,
   pageNumber,
@@ -47,80 +54,121 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
   targetWidth,
   opacity,
   greyscale,
+  activeHighlightColor,
   highlights,
   isBase,
   isRotatedLandscape,
   scrollContainerRef,
   onAddHighlight,
   onRemoveHighlight,
+  onUndoHighlight,
   onBaseEditAttempt,
 }) => {
   const pageContainerRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const draftHighlightRef = useRef<HighlightRect | null>(null);
+  const lastTapRef = useRef<TapPoint | null>(null);
 
-  const [pageSize, setPageSize] = useState<{ width: number; height: number }>({
-    width: targetWidth,
-    height: Math.round(targetWidth * 0.77),
-  });
+  const [isNearViewport, setIsNearViewport] = useState<boolean>(pageNumber <= 3);
+  const [aspectRatio, setAspectRatio] = useState<number>(0.7727);
   const [renderTick, setRenderTick] = useState(0);
   const [draftHighlight, setDraftHighlight] = useState<HighlightRect | null>(null);
-  const draftHighlightRef = useRef<HighlightRect | null>(null);
   const [selectedHighlightId, setSelectedHighlightId] = useState<string | null>(null);
 
-  // Render the PDF page width-locked to targetWidth
+  const cssWidth = Math.max(1, Math.round(targetWidth));
+  const cssHeight = Math.max(1, Math.round(cssWidth * aspectRatio));
+
+  // Lazy-render only pages near the scroll viewport to prevent memory crashes on large PDFs
   useEffect(() => {
-    if (targetWidth <= 0) return;
+    const el = pageContainerRef.current;
+    const rootEl = scrollContainerRef.current;
+    if (!el || !rootEl) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry) {
+          setIsNearViewport(entry.isIntersecting);
+        }
+      },
+      {
+        root: rootEl,
+        rootMargin: '1200px 0px',
+        threshold: 0,
+      }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [scrollContainerRef]);
+
+  // Render PDF page when near viewport; release canvas memory when scrolled far away
+  useEffect(() => {
+    const baseCanvas = baseCanvasRef.current;
+    const overlayCanvas = overlayCanvasRef.current;
+
+    if (!isNearViewport || targetWidth <= 0) {
+      if (baseCanvas && overlayCanvas) {
+        baseCanvas.width = 0;
+        baseCanvas.height = 0;
+        overlayCanvas.width = 0;
+        overlayCanvas.height = 0;
+      }
+      return;
+    }
+
     let cancelled = false;
     let activeRenderTask: { cancel: () => void; promise: Promise<void> } | null = null;
 
     (async () => {
       try {
-        const page = await pdf.getPage(pageNumber);
-        if (cancelled) return;
+        await withRenderSlot(async () => {
+          if (cancelled) return;
+          const page = await pdf.getPage(pageNumber);
+          if (cancelled) return;
 
-        const baseViewport = page.getViewport({ scale: 1 });
-        const cssScale = targetWidth / baseViewport.width;
-        const cssWidth = Math.round(targetWidth);
-        const cssHeight = Math.round(baseViewport.height * cssScale);
+          const baseViewport = page.getViewport({ scale: 1 });
+          const nextRatio = baseViewport.height / Math.max(1, baseViewport.width);
+          setAspectRatio((prev) => (Math.abs(prev - nextRatio) > 0.002 ? nextRatio : prev));
 
-        setPageSize({ width: cssWidth, height: cssHeight });
+          const rawScale = targetWidth / Math.max(1, baseViewport.width);
+          const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+          const maxScale = MAX_CANVAS_PIXEL_WIDTH / Math.max(1, baseViewport.width);
+          const renderScale = Math.min(rawScale * dpr, maxScale);
+          const renderViewport = page.getViewport({ scale: renderScale });
 
-        const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
-        const renderViewport = page.getViewport({ scale: cssScale * dpr });
+          if (!baseCanvas || !overlayCanvas || cancelled) return;
 
-        const baseCanvas = baseCanvasRef.current;
-        const overlayCanvas = overlayCanvasRef.current;
-        if (!baseCanvas || !overlayCanvas) return;
+          const pixelWidth = Math.max(1, Math.round(renderViewport.width));
+          const pixelHeight = Math.max(1, Math.round(renderViewport.height));
 
-        const pixelWidth = Math.round(renderViewport.width);
-        const pixelHeight = Math.round(renderViewport.height);
+          baseCanvas.width = pixelWidth;
+          baseCanvas.height = pixelHeight;
+          overlayCanvas.width = pixelWidth;
+          overlayCanvas.height = pixelHeight;
 
-        baseCanvas.width = pixelWidth;
-        baseCanvas.height = pixelHeight;
-        overlayCanvas.width = pixelWidth;
-        overlayCanvas.height = pixelHeight;
+          const ctx = baseCanvas.getContext('2d', { alpha: false });
+          if (!ctx) return;
 
-        const ctx = baseCanvas.getContext('2d');
-        if (!ctx) return;
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, pixelWidth, pixelHeight);
 
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, pixelWidth, pixelHeight);
-
-        const task = page.render({
-          canvasContext: ctx,
-          viewport: renderViewport,
-          canvas: baseCanvas,
+          const task = page.render({
+            canvasContext: ctx,
+            viewport: renderViewport,
+            canvas: baseCanvas,
+          });
+          activeRenderTask = task;
+          await task.promise;
+          if (!cancelled) {
+            setRenderTick((t) => t + 1);
+          }
         });
-        activeRenderTask = task;
-        await task.promise;
-        if (!cancelled) {
-          setRenderTick((t) => t + 1);
-        }
       } catch (err) {
         if (!cancelled && (err as { name?: string })?.name !== 'RenderingCancelledException') {
-          console.error('PDF page render error:', err);
+          console.error(`PDF page ${pageNumber} render error:`, err);
         }
       }
     })();
@@ -131,13 +179,13 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         try {
           activeRenderTask.cancel();
         } catch {
-          // ignore cancel errors
+          // ignore
         }
       }
     };
-  }, [pdf, pageNumber, targetWidth]);
+  }, [pdf, pageNumber, targetWidth, isNearViewport]);
 
-  // Draw full-opacity (opacity: 1) straight-line highlight strips onto the overlay canvas
+  // Draw full-opacity (1.0) straight-line highlight strips onto overlay canvas
   useEffect(() => {
     const baseCanvas = baseCanvasRef.current;
     const overlayCanvas = overlayCanvasRef.current;
@@ -159,28 +207,31 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
       const sw = Math.max(2, Math.ceil((hl.xEnd - hl.xStart) * w));
       const bandH = Math.max(12, Math.round(hl.heightRatio * h));
       const sy = Math.max(0, Math.min(h - bandH, Math.round(hl.yCenter * h - bandH / 2)));
+      const hlHex = hl.color || DEFAULT_HIGHLIGHT_COLOR;
 
-      // 1. Paint solid white paper behind the highlighted strip so surrounding low-opacity dimming does not dilute it
       ctx.save();
+      // 1. Paint solid white paper so dimmed PDF underneath does not dilute the highlight
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(sx, sy, sw, bandH);
 
-      // 2. Copy crisp full-opacity (1.0) PDF pixels from the rendered base page
+      // 2. Copy crisp full-opacity (1.0) PDF pixels (respecting Greyscale checkbox on PDF ink)
+      ctx.filter = greyscale ? 'grayscale(100%)' : 'none';
       ctx.drawImage(baseCanvas, sx, sy, sw, bandH, sx, sy, sw, bandH);
 
-      // 3. Apply subtle straight-line highlight marker tint + crisp top/bottom edges
+      // 3. Apply chosen highlight color tint + bottom accent rule (kept colorful even when PDF is greyscale)
+      ctx.filter = 'none';
       ctx.globalCompositeOperation = 'multiply';
-      ctx.fillStyle = 'rgba(253, 224, 71, 0.36)';
+      ctx.fillStyle = hexToRgba(hlHex, 0.36);
       ctx.fillRect(sx, sy, sw, bandH);
 
       ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = 'rgba(217, 119, 6, 0.55)';
-      ctx.fillRect(sx, sy + bandH - Math.max(2, Math.round(bandH * 0.08)), sw, Math.max(2, Math.round(bandH * 0.08)));
+      const edgeH = Math.max(2, Math.round(bandH * 0.09));
+      ctx.fillStyle = hexToRgba(hlHex, 0.88);
+      ctx.fillRect(sx, sy + bandH - edgeH, sw, edgeH);
       ctx.restore();
     }
-  }, [highlights, draftHighlight, renderTick]);
+  }, [highlights, draftHighlight, greyscale, renderTick]);
 
-  // Clear highlight selection when switching to Base or when highlights change
   useEffect(() => {
     if (isBase) {
       setSelectedHighlightId(null);
@@ -237,7 +288,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         try {
           e.currentTarget.setPointerCapture(e.pointerId);
         } catch {
-          // ignore if capture unsupported
+          // ignore
         }
       } else {
         state.mode = 'scroll';
@@ -250,7 +301,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
       const rect = el.getBoundingClientRect();
       const local = mapClientPointToLocal(e.clientX, e.clientY, rect, isRotatedLandscape);
 
-      // Strictly straight horizontal line locked at state.startLocalY (no curve!)
+      // Strictly straight horizontal line locked at state.startLocalY
       const preview = computeStraightHighlight({
         pageIndex,
         startX: state.startLocalX,
@@ -258,6 +309,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         startY: state.startLocalY,
         pageWidth: state.pageWidth,
         pageHeight: state.pageHeight,
+        color: activeHighlightColor,
         bandHeightPx: Math.max(20, Math.round(state.pageHeight * 0.032)),
         id: 'draft',
       });
@@ -292,11 +344,13 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
       if (committed) {
         onAddHighlight({
           ...committed,
+          color: activeHighlightColor,
           id: `hl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         });
       }
       draftHighlightRef.current = null;
       setDraftHighlight(null);
+      lastTapRef.current = null;
       try {
         if (e.currentTarget.hasPointerCapture(e.pointerId)) {
           e.currentTarget.releasePointerCapture(e.pointerId);
@@ -304,25 +358,42 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
       } catch {
         // ignore
       }
-    } else if (state.mode === 'pending') {
-      // Tap without drag: toggle selection if tapping on an existing highlight
-      if (!isBase) {
-        const nx = state.startLocalX / Math.max(1, state.pageWidth);
-        const ny = state.startLocalY / Math.max(1, state.pageHeight);
-        const hit = [...highlights].reverse().find(
-          (hl) =>
-            nx >= hl.xStart &&
-            nx <= hl.xEnd &&
-            Math.abs(ny - hl.yCenter) <= hl.heightRatio * 0.75
-        );
-        setSelectedHighlightId((prev) => (hit ? (prev === hit.id ? null : hit.id) : null));
+    } else if (state.mode === 'pending' && e.type === 'pointerup') {
+      const now = Date.now();
+      const currentTap: TapPoint = {
+        x: e.clientX,
+        y: e.clientY,
+        time: now,
+      };
+
+      if (isDoubleTapGesture(lastTapRef.current, currentTap)) {
+        lastTapRef.current = null;
+        setSelectedHighlightId(null);
+        if (isBase) {
+          onBaseEditAttempt();
+        } else {
+          onUndoHighlight();
+        }
+      } else {
+        lastTapRef.current = currentTap;
+        if (!isBase) {
+          const nx = state.startLocalX / Math.max(1, state.pageWidth);
+          const ny = state.startLocalY / Math.max(1, state.pageHeight);
+          const hit = [...highlights].reverse().find(
+            (hl) =>
+              nx >= hl.xStart &&
+              nx <= hl.xEnd &&
+              Math.abs(ny - hl.yCenter) <= hl.heightRatio * 0.75
+          );
+          setSelectedHighlightId((prev) => (hit ? (prev === hit.id ? null : hit.id) : null));
+        }
       }
     }
 
     dragRef.current = null;
   };
 
-  const filterCss = greyscale ? 'grayscale(100%)' : 'none';
+  const baseFilterCss = greyscale ? 'grayscale(100%)' : 'none';
 
   return (
     <div
@@ -333,8 +404,8 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
       onPointerUp={finishDrag}
       onPointerCancel={finishDrag}
       style={{
-        width: `${pageSize.width}px`,
-        height: `${pageSize.height}px`,
+        width: `${cssWidth}px`,
+        height: `${cssHeight}px`,
         touchAction: isRotatedLandscape ? 'none' : 'pan-y',
       }}
       className={`relative bg-white select-none overflow-hidden shadow-sm border-b border-neutral-800/30 ${
@@ -348,7 +419,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
           width: '100%',
           height: '100%',
           opacity,
-          filter: filterCss,
+          filter: baseFilterCss,
         }}
         className="block pointer-events-none"
       />
@@ -360,7 +431,6 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
           width: '100%',
           height: '100%',
           opacity: 1,
-          filter: filterCss,
         }}
         className="absolute inset-0 block pointer-events-none"
       />

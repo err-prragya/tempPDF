@@ -1,4 +1,5 @@
 import type { PdfDocumentRecord } from '../types/pdf';
+import { DEFAULT_HIGHLIGHT_COLOR } from './colors';
 import { createSamplePdfBytes } from './samplePdf';
 import { createBaseVariant, createId } from './variants';
 
@@ -25,6 +26,20 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
+function normalizeRecord(doc: PdfDocumentRecord): PdfDocumentRecord {
+  return {
+    ...doc,
+    highlightColor: doc.highlightColor || DEFAULT_HIGHLIGHT_COLOR,
+    variants: doc.variants.map((v) => ({
+      ...v,
+      highlights: v.highlights.map((h) => ({
+        ...h,
+        color: h.color || DEFAULT_HIGHLIGHT_COLOR,
+      })),
+    })),
+  };
+}
+
 export async function loadAllDocuments(): Promise<PdfDocumentRecord[]> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
@@ -32,7 +47,7 @@ export async function loadAllDocuments(): Promise<PdfDocumentRecord[]> {
     const store = tx.objectStore(STORE_DOCS);
     const req = store.getAll();
     req.onsuccess = () => {
-      const records = (req.result as PdfDocumentRecord[]) || [];
+      const records = ((req.result as PdfDocumentRecord[]) || []).map(normalizeRecord);
       records.sort((a, b) => b.addedAt - a.addedAt);
       resolve(records);
     };
@@ -52,32 +67,41 @@ export async function saveDocumentRecord(doc: PdfDocumentRecord): Promise<void> 
 
 export async function savePdfFile(
   doc: PdfDocumentRecord,
-  bytes: Uint8Array
-): Promise<void> {
-  const db = await openDb();
-  // Store a clean ArrayBuffer copy
-  const bufferCopy = bytes.slice().buffer;
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction([STORE_DOCS, STORE_FILES], 'readwrite');
-    tx.objectStore(STORE_DOCS).put(doc);
-    tx.objectStore(STORE_FILES).put({ id: doc.id, data: bufferCopy });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  source: Blob | Uint8Array
+): Promise<boolean> {
+  try {
+    const db = await openDb();
+    const storedData =
+      source instanceof Blob ? await source.arrayBuffer() : source.slice().buffer;
+    return await new Promise<boolean>((resolve, reject) => {
+      const tx = db.transaction([STORE_DOCS, STORE_FILES], 'readwrite');
+      tx.objectStore(STORE_DOCS).put(doc);
+      tx.objectStore(STORE_FILES).put({ id: doc.id, data: storedData });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('IndexedDB persistence skipped (file remains active in session):', err);
+    return false;
+  }
 }
 
-export async function loadPdfBytes(id: string): Promise<Uint8Array | null> {
+export async function loadPdfBlob(id: string): Promise<Blob | null> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_FILES, 'readonly');
     const req = tx.objectStore(STORE_FILES).get(id);
     req.onsuccess = () => {
-      const result = req.result as { id: string; data: ArrayBuffer } | undefined;
+      const result = req.result as { id: string; data: ArrayBuffer | Blob } | undefined;
       if (!result?.data) {
         resolve(null);
         return;
       }
-      resolve(new Uint8Array(result.data));
+      if (result.data instanceof Blob) {
+        resolve(result.data);
+        return;
+      }
+      resolve(new Blob([result.data], { type: 'application/pdf' }));
     };
     req.onerror = () => reject(req.error);
   });
@@ -114,6 +138,7 @@ export async function ensureSamplePdfSeeded(): Promise<PdfDocumentRecord[]> {
     addedAt: now,
     greyscale: false,
     opacity: 1,
+    highlightColor: DEFAULT_HIGHLIGHT_COLOR,
     activeVariantIndex: 0,
     variants: [createBaseVariant(now)],
     isSample: true,
@@ -134,7 +159,8 @@ export async function restoreSamplePdf(): Promise<PdfDocumentRecord> {
     pageCount: 3,
     addedAt: now,
     greyscale: false,
-    opacity: 0.35,
+    opacity: 1,
+    highlightColor: DEFAULT_HIGHLIGHT_COLOR,
     activeVariantIndex: 0,
     variants: [createBaseVariant(now)],
     isSample: true,

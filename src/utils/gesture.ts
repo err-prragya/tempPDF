@@ -1,4 +1,5 @@
 import type { HighlightRect } from '../types/pdf';
+import { DEFAULT_HIGHLIGHT_COLOR } from './colors';
 import { createId } from './variants';
 
 export type DragGestureMode = 'pending' | 'highlight' | 'scroll';
@@ -10,6 +11,25 @@ export interface SimpleRect {
   bottom: number;
   width: number;
   height: number;
+}
+
+export interface TapPoint {
+  x: number;
+  y: number;
+  time: number;
+}
+
+export function isDoubleTapGesture(
+  previousTap: TapPoint | null,
+  currentTap: TapPoint,
+  maxDelayMs = 340,
+  maxDistancePx = 44
+): boolean {
+  if (!previousTap) return false;
+  const dt = currentTap.time - previousTap.time;
+  if (dt < 0 || dt > maxDelayMs) return false;
+  const dist = Math.hypot(currentTap.x - previousTap.x, currentTap.y - previousTap.y);
+  return dist <= maxDistancePx;
 }
 
 export function classifyDragGesture(
@@ -74,6 +94,7 @@ export function computeStraightHighlight(params: {
   startY: number;
   pageWidth: number;
   pageHeight: number;
+  color?: string;
   bandHeightPx?: number;
   id?: string;
   createdAt?: number;
@@ -85,6 +106,7 @@ export function computeStraightHighlight(params: {
     startY,
     pageWidth,
     pageHeight,
+    color = DEFAULT_HIGHLIGHT_COLOR,
     bandHeightPx = 28,
     id,
     createdAt = Date.now(),
@@ -113,6 +135,7 @@ export function computeStraightHighlight(params: {
     xEnd,
     yCenter,
     heightRatio,
+    color,
     createdAt,
   };
 }

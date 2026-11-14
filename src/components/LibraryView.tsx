@@ -272,10 +272,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 border-t border-slate-200 pt-6">
             <div className="space-y-1.5">
-              <h3 className="text-sm font-semibold text-slate-900">01. Horizontal Swipe to Highlight</h3>
+              <h3 className="text-sm font-semibold text-slate-900">01. Horizontal Swipe & Double-Tap Undo</h3>
               <p className="text-sm text-slate-600 leading-relaxed">
-                No highlight button needed. Drag horizontally across any line on a variant to draw a
-                straight-line highlight at full 100% opacity.
+                Drag horizontally across any line to draw a straight-line highlight in any of 20
+                colors at 100% opacity. Double-tap anywhere to undo your last highlight.
               </p>
             </div>
             <div className="space-y-1.5">

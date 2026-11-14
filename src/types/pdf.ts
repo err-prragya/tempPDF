@@ -5,6 +5,7 @@ export interface HighlightRect {
   xEnd: number; // Normalized [0..1] right edge
   yCenter: number; // Normalized [0..1] straight horizontal line center
   heightRatio: number; // Normalized [0..1] line thickness relative to page height
+  color: string; // Hex color from the 20-color highlight palette
   createdAt: number;
 }
 
@@ -24,6 +25,7 @@ export interface PdfDocumentRecord {
   addedAt: number;
   greyscale: boolean;
   opacity: number; // [0.05..1]
+  highlightColor: string; // Active hex color for new highlights
   activeVariantIndex: number;
   variants: PdfVariant[];
   isSample?: boolean;

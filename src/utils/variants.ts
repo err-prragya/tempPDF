@@ -1,4 +1,5 @@
 import type { HighlightRect, PdfVariant } from '../types/pdf';
+import { DEFAULT_HIGHLIGHT_COLOR } from './colors';
 
 export function clampOpacity(value: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -62,6 +63,7 @@ export function duplicateVariant(
     isBase: false,
     highlights: source.highlights.map((h) => ({
       ...h,
+      color: h.color || DEFAULT_HIGHLIGHT_COLOR,
       id: createId('hl'),
       createdAt: now,
     })),
@@ -88,6 +90,7 @@ export function addHighlightToVariant(
     xEnd,
     yCenter: Math.max(0, Math.min(1, highlight.yCenter)),
     heightRatio: Math.max(0.01, Math.min(0.15, highlight.heightRatio)),
+    color: highlight.color || DEFAULT_HIGHLIGHT_COLOR,
   };
 
   return {
@@ -106,6 +109,23 @@ export function removeHighlightFromVariant(
   return {
     ...variant,
     highlights: variant.highlights.filter((h) => h.id !== highlightId),
+  };
+}
+
+export function undoLastHighlight(variant: PdfVariant): {
+  variant: PdfVariant;
+  removed: HighlightRect | null;
+} {
+  if (variant.isBase || variant.highlights.length === 0) {
+    return { variant, removed: null };
+  }
+  const removed = variant.highlights[variant.highlights.length - 1];
+  return {
+    variant: {
+      ...variant,
+      highlights: variant.highlights.slice(0, -1),
+    },
+    removed,
   };
 }
 
