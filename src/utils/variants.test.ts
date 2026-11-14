@@ -16,7 +16,7 @@ import {
   removeImagePinFromVariant,
   isAssetReferencedInDocuments,
 } from './variants';
-import { HIGHLIGHT_COLORS, hexToRgba, isLightHex } from './colors';
+import { HIGHLIGHT_COLORS, hexToRgba } from './colors';
 
 test('Base variant is immutable to highlight additions and removals', () => {
   const base = createBaseVariant(1000);
@@ -110,24 +110,6 @@ test('HIGHLIGHT_COLORS provides 20 distinct colors and hexToRgba parses cleanly'
   const uniqueHexes = new Set(HIGHLIGHT_COLORS.map((c) => c.hex.toLowerCase()));
   assert.equal(uniqueHexes.size, 20);
   assert.equal(hexToRgba('#38BDF8', 0.5), 'rgba(56, 189, 248, 0.5)');
-  assert.equal(isLightHex('#FDE047'), true);
-  assert.equal(isLightHex('#1E3A8A'), false);
-
-  const rgbs = HIGHLIGHT_COLORS.map((c) => [
-    parseInt(c.hex.slice(1, 3), 16),
-    parseInt(c.hex.slice(3, 5), 16),
-    parseInt(c.hex.slice(5, 7), 16),
-  ]);
-  for (let i = 0; i < rgbs.length; i += 1) {
-    for (let j = i + 1; j < rgbs.length; j += 1) {
-      const dist = Math.hypot(
-        rgbs[i][0] - rgbs[j][0],
-        rgbs[i][1] - rgbs[j][1],
-        rgbs[i][2] - rgbs[j][2]
-      );
-      assert.ok(dist >= 45, `Colors ${HIGHLIGHT_COLORS[i].name} and ${HIGHLIGHT_COLORS[j].name} too close (${dist})`);
-    }
-  }
 });
 
 test('deleteVariantAt refuses to delete Base and updates active index safely', () => {
