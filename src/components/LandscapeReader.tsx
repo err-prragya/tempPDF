@@ -19,7 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import type { HighlightRect, ImagePin, PdfDocumentRecord } from '../types/pdf';
-import { DEFAULT_HIGHLIGHT_COLOR, HIGHLIGHT_COLORS } from '../utils/colors';
+import { DEFAULT_HIGHLIGHT_COLOR, HIGHLIGHT_COLORS, isLightHex } from '../utils/colors';
 import {
   filterAndSortHighlights,
   normalizeHighlightStars,
@@ -682,7 +682,12 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                           }`}
                         >
                           {selected && (
-                            <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-950 stroke-[2.5]" aria-hidden="true" />
+                            <Check
+                              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5] ${
+                                isLightHex(c.hex) ? 'text-slate-950' : 'text-white'
+                              }`}
+                              aria-hidden="true"
+                            />
                           )}
                         </button>
                       );
@@ -1017,7 +1022,11 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
               <div
                 role="dialog"
                 aria-label="20 highlight colors"
-                className="absolute right-0 bottom-12 w-60 bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3 z-50 space-y-2.5"
+                style={{
+                  maxHeight: `${Math.max(200, landscapeHeight - 60)}px`,
+                  maxWidth: `${Math.max(240, landscapeWidth - 24)}px`,
+                }}
+                className="absolute right-0 bottom-12 w-60 bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3 z-50 space-y-2.5 overflow-y-auto"
               >
                 <div className="flex items-center justify-between text-xs text-slate-300">
                   <span className="font-medium">Highlight Color</span>
@@ -1044,11 +1053,16 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                         className={`w-9 h-9 rounded-lg flex items-center justify-center transition-transform hover:scale-105 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${
                           selected
                             ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-900'
-                            : 'ring-1 ring-black/20'
+                            : 'ring-1 ring-white/10'
                         }`}
                       >
                         {selected && (
-                          <Check className="w-4 h-4 text-slate-950 stroke-[2.5]" aria-hidden="true" />
+                          <Check
+                            className={`w-4 h-4 stroke-[2.5] ${
+                              isLightHex(color.hex) ? 'text-slate-950' : 'text-white'
+                            }`}
+                            aria-hidden="true"
+                          />
                         )}
                       </button>
                     );
@@ -1082,10 +1096,14 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
               <div
                 role="dialog"
                 aria-label="Reader controls menu"
-                className="absolute right-0 bottom-12 w-72 sm:w-80 bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-4 z-50 space-y-4"
+                style={{
+                  maxHeight: `${Math.max(200, landscapeHeight - 60)}px`,
+                  maxWidth: `${Math.max(280, landscapeWidth - 24)}px`,
+                }}
+                className="absolute right-0 bottom-12 w-[480px] sm:w-[540px] bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl z-50 flex flex-col overflow-hidden"
               >
-                {/* Header: Back to Library, Document Name, Fullscreen, Close */}
-                <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800">
+                {/* Fixed Header: Back to Library, Document Name, Fullscreen, Close */}
+                <div className="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={handleExit}
@@ -1122,132 +1140,147 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                   </div>
                 </div>
 
-                {/* Variant Actions & Image Attachment */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span className="font-medium text-slate-200">Variant</span>
-                    <span className="font-mono-num">
-                      {isBase
-                        ? 'Base · Read-only'
-                        : `${activeVariant.highlights.length} hl · ${(activeVariant.imagePins ?? []).length} img`}
-                    </span>
+                {/* Scrollable Two-Column Content */}
+                <div
+                  className={`flex-1 min-h-0 overflow-y-auto p-3.5 gap-4 grid ${
+                    landscapeWidth >= 460 ? 'grid-cols-2' : 'grid-cols-1'
+                  }`}
+                >
+                  {/* Column 1: Variant Actions & Image Attachment */}
+                  <div className="space-y-2 min-w-0">
+                    <div className="flex items-center justify-between text-xs text-slate-400">
+                      <span className="font-medium text-slate-200">Variant</span>
+                      <span className="font-mono-num">
+                        {isBase
+                          ? 'Base · Read-only'
+                          : `${activeVariant.highlights.length} hl · ${(activeVariant.imagePins ?? []).length} img`}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onCreateVariant();
+                          setIsMenuOpen(false);
+                        }}
+                        className="inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>New Variant</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onDuplicateVariant();
+                          setIsMenuOpen(false);
+                        }}
+                        className="inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Duplicate</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsMenuOpen(false);
+                          if (isBase) {
+                            setBaseNoticeVisible(true);
+                            return;
+                          }
+                          setIsCameraOpen(true);
+                        }}
+                        className="col-span-2 inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        <Camera className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
+                        <span>Capture Image Pin</span>
+                      </button>
+
+                      {!isBase && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={startRename}
+                            aria-label="Rename variant"
+                            className="inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
+                          >
+                            <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Rename</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onDeleteVariant(safeIndex);
+                              setIsMenuOpen(false);
+                            }}
+                            aria-label={`Delete ${activeVariant.name}`}
+                            className="inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-medium text-red-300 bg-red-950/50 hover:bg-red-900/60 border border-red-900/50 rounded-lg transition-colors whitespace-nowrap"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>Delete</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onCreateVariant();
-                        setIsMenuOpen(false);
-                      }}
-                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors whitespace-nowrap"
-                    >
-                      <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>New Variant</span>
-                    </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onDuplicateVariant();
-                        setIsMenuOpen(false);
-                      }}
-                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
-                    >
-                      <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>Duplicate</span>
-                    </button>
+                  {/* Column 2: Display & Highlight Controllers */}
+                  <div
+                    className={`space-y-3 min-w-0 ${
+                      landscapeWidth >= 460
+                        ? 'pl-3.5 border-l border-slate-800'
+                        : 'pt-3 border-t border-slate-800'
+                    }`}
+                  >
+                    <div className="text-xs font-medium text-slate-200">Display</div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        if (isBase) {
-                          setBaseNoticeVisible(true);
-                          return;
-                        }
-                        setIsCameraOpen(true);
-                      }}
-                      className="col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
-                    >
-                      <Camera className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
-                      <span>Capture Image Pin</span>
-                    </button>
+                    <label className="flex items-center justify-between gap-2.5 text-xs font-medium text-slate-200">
+                      <span className="shrink-0 w-14 text-slate-400">Width</span>
+                      <input
+                        type="range"
+                        aria-label="Highlight width"
+                        min={MIN_HIGHLIGHT_WIDTH}
+                        max={MAX_HIGHLIGHT_WIDTH}
+                        step={0.002}
+                        value={activeWidth}
+                        onChange={(e) => onChangeHighlightWidth(Number(e.target.value))}
+                        className="studio-range flex-1 min-w-0"
+                      />
+                      <span className="font-mono-num text-xs text-slate-300 w-8 text-right shrink-0">
+                        {Math.round(activeWidth * 1000)}
+                      </span>
+                    </label>
 
-                    {!isBase && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={startRename}
-                          aria-label="Rename variant"
-                          className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
-                        >
-                          <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>Rename</span>
-                        </button>
+                    <label className="flex items-center justify-between gap-2.5 text-xs font-medium text-slate-200">
+                      <span className="shrink-0 w-14 text-slate-400">Opacity</span>
+                      <input
+                        type="range"
+                        aria-label="Whole PDF opacity"
+                        min={0.05}
+                        max={1}
+                        step={0.05}
+                        value={documentRecord.opacity}
+                        onChange={(e) => onChangeOpacity(Number(e.target.value))}
+                        className="studio-range flex-1 min-w-0"
+                      />
+                      <span className="font-mono-num text-xs text-amber-400 w-8 text-right shrink-0">
+                        {Math.round(documentRecord.opacity * 100)}%
+                      </span>
+                    </label>
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onDeleteVariant(safeIndex);
-                            setIsMenuOpen(false);
-                          }}
-                          aria-label={`Delete ${activeVariant.name}`}
-                          className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-red-300 bg-red-950/50 hover:bg-red-900/60 border border-red-900/50 rounded-lg transition-colors whitespace-nowrap"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>Delete</span>
-                        </button>
-                      </>
-                    )}
+                    <label className="flex items-center justify-between gap-3 text-xs font-medium text-slate-200 cursor-pointer pt-1">
+                      <span>Greyscale PDF</span>
+                      <input
+                        type="checkbox"
+                        aria-label="Greyscale"
+                        checked={documentRecord.greyscale}
+                        onChange={(e) => onToggleGreyscale(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-500 focus:ring-amber-500 focus:ring-offset-slate-900 cursor-pointer"
+                      />
+                    </label>
                   </div>
-                </div>
-
-                {/* Display & Highlight Controllers */}
-                <div className="space-y-3 pt-3 border-t border-slate-800">
-                  <label className="flex items-center justify-between gap-3 text-xs font-medium text-slate-200">
-                    <span className="shrink-0 w-20">Width</span>
-                    <input
-                      type="range"
-                      aria-label="Highlight width"
-                      min={MIN_HIGHLIGHT_WIDTH}
-                      max={MAX_HIGHLIGHT_WIDTH}
-                      step={0.002}
-                      value={activeWidth}
-                      onChange={(e) => onChangeHighlightWidth(Number(e.target.value))}
-                      className="studio-range flex-1"
-                    />
-                    <span className="font-mono-num text-xs text-slate-300 w-9 text-right">
-                      {Math.round(activeWidth * 1000)}
-                    </span>
-                  </label>
-
-                  <label className="flex items-center justify-between gap-3 text-xs font-medium text-slate-200">
-                    <span className="shrink-0 w-20">Opacity</span>
-                    <input
-                      type="range"
-                      aria-label="Whole PDF opacity"
-                      min={0.05}
-                      max={1}
-                      step={0.05}
-                      value={documentRecord.opacity}
-                      onChange={(e) => onChangeOpacity(Number(e.target.value))}
-                      className="studio-range flex-1"
-                    />
-                    <span className="font-mono-num text-xs text-amber-400 w-9 text-right">
-                      {Math.round(documentRecord.opacity * 100)}%
-                    </span>
-                  </label>
-
-                  <label className="flex items-center justify-between gap-3 text-xs font-medium text-slate-200 cursor-pointer pt-1">
-                    <span>Greyscale PDF</span>
-                    <input
-                      type="checkbox"
-                      aria-label="Greyscale"
-                      checked={documentRecord.greyscale}
-                      onChange={(e) => onToggleGreyscale(e.target.checked)}
-                      className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-500 focus:ring-amber-500 focus:ring-offset-slate-900 cursor-pointer"
-                    />
-                  </label>
                 </div>
               </div>
             )}
