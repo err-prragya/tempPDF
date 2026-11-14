@@ -1,6 +1,6 @@
 {
   "name": "tempPDF",
   "description": "Landscape full-screen PDF reader with gesture-based straight-line focus highlighting, greyscale & opacity dimming, and navigable study variants.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

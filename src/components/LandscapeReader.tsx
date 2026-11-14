@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
+  Camera,
   Check,
   Copy,
-  ImagePlus,
   Lock,
   Maximize2,
   Minimize2,
@@ -23,6 +23,7 @@ import {
   MAX_HIGHLIGHT_WIDTH,
   MIN_HIGHLIGHT_WIDTH,
 } from '../utils/variants';
+import { CameraCropModal } from './CameraCropModal';
 import { PdfPageCanvas } from './PdfPageCanvas';
 
 interface LandscapeReaderProps {
@@ -75,7 +76,6 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const colorPickerRef = useRef<HTMLDivElement>(null);
   const navMenuRef = useRef<HTMLDivElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const onPagesResolvedRef = useRef(onPagesResolved);
   onPagesResolvedRef.current = onPagesResolved;
 
@@ -97,6 +97,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [isSavingImage, setIsSavingImage] = useState(false);
   const [activePin, setActivePin] = useState<ImagePin | null>(null);
@@ -259,6 +260,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
 
   useEffect(() => {
     setIsRenaming(false);
+    setIsCameraOpen(false);
     setPendingImageFile(null);
     setActivePin(null);
   }, [safeIndex]);
@@ -288,12 +290,9 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     };
   }, [activePin, onLoadImageAssetUrl]);
 
-  const handleImageFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
+  const handleCroppedCameraFile = (file: File) => {
+    setIsCameraOpen(false);
     setPendingImageFile(file);
-    setIsMenuOpen(false);
   };
 
   const handlePlaceImageAt = async (pageIndex: number, nx: number, ny: number) => {
@@ -432,11 +431,11 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           role="status"
           className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-amber-400/70 text-slate-100 text-xs shadow-xl backdrop-blur-md max-w-[90%]"
         >
-          <ImagePlus className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
+          <Camera className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
           <span className="truncate">
             {isSavingImage
-              ? 'Placing image...'
-              : `Tap anywhere on the PDF to place "${pendingImageFile.name}"`}
+              ? 'Placing photo...'
+              : 'Tap anywhere on the PDF to place photo'}
           </span>
           <button
             type="button"
@@ -467,7 +466,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
         >
           <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
-          <span>Base is read-only. Create a variant to highlight or add images.</span>
+          <span>Base is read-only. Create a variant to highlight or capture photos.</span>
           <button
             type="button"
             onClick={() => {
@@ -480,16 +479,6 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           </button>
         </div>
       )}
-
-      {/* Hidden Image Picker Input */}
-      <input
-        ref={imageInputRef}
-        type="file"
-        accept="image/*"
-        onChange={handleImageFileSelected}
-        className="hidden"
-        aria-label="Select image to attach to PDF"
-      />
 
       {/* Single Compact Bottom Bar: Variants + Highlight Color + Controls Menu */}
       <footer
@@ -735,17 +724,17 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                     <button
                       type="button"
                       onClick={() => {
+                        setIsMenuOpen(false);
                         if (isBase) {
-                          setIsMenuOpen(false);
                           setBaseNoticeVisible(true);
                           return;
                         }
-                        imageInputRef.current?.click();
+                        setIsCameraOpen(true);
                       }}
                       className="col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
                     >
-                      <ImagePlus className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
-                      <span>Add Image Pin</span>
+                      <Camera className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
+                      <span>Capture Image Pin</span>
                     </button>
 
                     {!isBase && (
@@ -829,6 +818,14 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           </div>
         </div>
       </footer>
+
+      {/* Camera Capture & Crop Screen */}
+      <CameraCropModal
+        isOpen={isCameraOpen}
+        isRotatedLandscape={isPortraitViewport}
+        onClose={() => setIsCameraOpen(false)}
+        onConfirmCroppedFile={handleCroppedCameraFile}
+      />
 
       {/* Image Pin Lightbox Modal */}
       {activePin && (
