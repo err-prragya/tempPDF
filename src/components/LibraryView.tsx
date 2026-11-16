@@ -12,6 +12,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { PdfDocumentRecord } from '../types/pdf';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type FolderMode = 'none' | 'pending-permission' | 'readwrite' | 'readonly-fallback';
 
@@ -89,6 +90,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </span>
 
           <div className="flex items-center gap-2 shrink-0">
+            <PWAInstallButton />
             {isConnected ? (
               <button
                 type="button"

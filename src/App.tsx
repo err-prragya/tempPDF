@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { HighlightRect, ImagePin, PdfDocumentRecord } from './types/pdf';
 import { LibraryView, type FolderMode } from './components/LibraryView';
 import { LandscapeReader } from './components/LandscapeReader';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import { FOLDER_DATA_FILENAME, serializeFolderMetadata, type FolderMetadataFile } from './utils/folderMetadata';
 import {
   clearSavedFolderHandle,
@@ -522,7 +523,9 @@ export default function App() {
 
   if (activeDoc && activeSource) {
     return (
-      <LandscapeReader
+      <>
+        <OfflineIndicator />
+        <LandscapeReader
         documentRecord={activeDoc}
         pdfSource={activeSource}
         onExit={() => {
@@ -672,26 +675,30 @@ export default function App() {
           });
         }}
       />
+      </>
     );
   }
 
   return (
-    <LibraryView
-      folderMode={folderMode}
-      folderName={folderName}
-      documents={documents}
-      isBusy={isBusy}
-      errorMessage={errorMessage}
-      onChooseFolder={handleChooseFolder}
-      onReconnectFolder={handleReconnectFolder}
-      onRefreshFolder={handleRefreshFolder}
-      onFallbackFolderSelected={handleFallbackFolderSelected}
-      onImportFiles={handleImportFiles}
-      onCreateSampleInFolder={handleCreateSampleInFolder}
-      onExportFallbackMetadata={handleExportFallbackMetadata}
-      onOpenDocument={(id) => openDocumentById(id, true)}
-      onDeleteDocument={handleDeleteDocument}
-      onClearError={() => setErrorMessage(null)}
-    />
+    <>
+      <OfflineIndicator />
+      <LibraryView
+        folderMode={folderMode}
+        folderName={folderName}
+        documents={documents}
+        isBusy={isBusy}
+        errorMessage={errorMessage}
+        onChooseFolder={handleChooseFolder}
+        onReconnectFolder={handleReconnectFolder}
+        onRefreshFolder={handleRefreshFolder}
+        onFallbackFolderSelected={handleFallbackFolderSelected}
+        onImportFiles={handleImportFiles}
+        onCreateSampleInFolder={handleCreateSampleInFolder}
+        onExportFallbackMetadata={handleExportFallbackMetadata}
+        onOpenDocument={(id) => openDocumentById(id, true)}
+        onDeleteDocument={handleDeleteDocument}
+        onClearError={() => setErrorMessage(null)}
+      />
+    </>
   );
 }

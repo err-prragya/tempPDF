@@ -37,6 +37,7 @@ import {
 } from '../utils/variants';
 import { CameraCropModal } from './CameraCropModal';
 import { PdfPageCanvas } from './PdfPageCanvas';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface LandscapeReaderProps {
   documentRecord: PdfDocumentRecord;
@@ -1247,6 +1248,8 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                       className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-amber-500 focus:ring-amber-500 focus:ring-offset-slate-900 cursor-pointer"
                     />
                   </label>
+
+                  <PWAInstallButton className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap" />
                 </div>
               </div>
             )}
