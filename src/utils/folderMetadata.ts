@@ -7,6 +7,7 @@ import {
   createBaseVariant,
   createId,
   DEFAULT_HIGHLIGHT_WIDTH,
+  getDocumentImagePins,
 } from './variants';
 
 export const FOLDER_DATA_FILENAME = '.temppdf-data.json';
@@ -48,9 +49,29 @@ export function normalizeDocumentRecord(
     })
   );
 
+  const mergedImagePins = getDocumentImagePins({
+    id: doc.id || 'tmp',
+    name: doc.name,
+    fileSize: 0,
+    pageCount: 1,
+    addedAt: now,
+    greyscale: false,
+    opacity: 1,
+    highlightColor: DEFAULT_HIGHLIGHT_COLOR,
+    highlightWidth: DEFAULT_HIGHLIGHT_WIDTH,
+    activeVariantIndex: 0,
+    variants,
+    imagePins: Array.isArray(doc.imagePins) ? doc.imagePins : [],
+  });
+
+  const cleanVariants = variants.map((v) => ({
+    ...v,
+    imagePins: [],
+  }));
+
   const activeVariantIndex = Math.min(
     Math.max(0, typeof doc.activeVariantIndex === 'number' ? doc.activeVariantIndex : 0),
-    variants.length - 1
+    cleanVariants.length - 1
   );
 
   return {
@@ -67,7 +88,8 @@ export function normalizeDocumentRecord(
         ? clampHighlightWidth(doc.highlightWidth)
         : DEFAULT_HIGHLIGHT_WIDTH,
     activeVariantIndex,
-    variants,
+    variants: cleanVariants,
+    imagePins: mergedImagePins,
   };
 }
 

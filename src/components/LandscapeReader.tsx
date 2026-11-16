@@ -31,6 +31,7 @@ import { openPdfHandle, type LoadedPdfProxy, type ParsedPdfHandle } from '../uti
 import {
   createId,
   DEFAULT_HIGHLIGHT_WIDTH,
+  getDocumentImagePins,
   MAX_HIGHLIGHT_WIDTH,
   MIN_HIGHLIGHT_WIDTH,
 } from '../utils/variants';
@@ -295,6 +296,10 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   );
   const activeVariant = variants[safeIndex];
   const isBase = activeVariant?.isBase ?? true;
+  const universalImagePins = useMemo(
+    () => getDocumentImagePins(documentRecord),
+    [documentRecord]
+  );
 
   useEffect(() => {
     setIsRenaming(false);
@@ -449,7 +454,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   };
 
   const handlePlaceImageAt = async (pageIndex: number, nx: number, ny: number) => {
-    if (!pendingImageFile || isBase || isSavingImage) return;
+    if (!pendingImageFile || isSavingImage) return;
     const fileToSave = pendingImageFile;
     setIsSavingImage(true);
     try {
@@ -561,12 +566,10 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                 highlights={(activeVariant?.highlights ?? []).filter(
                   (h) => h.pageIndex === idx
                 )}
-                imagePins={(activeVariant?.imagePins ?? []).filter(
-                  (pin) => pin.pageIndex === idx
-                )}
+                imagePins={universalImagePins.filter((pin) => pin.pageIndex === idx)}
                 focusedHighlightId={focusedHighlightId}
                 selectedHighlightId={selectedHighlightId}
-                isPlacingImage={Boolean(pendingImageFile) && !isBase}
+                isPlacingImage={Boolean(pendingImageFile)}
                 isBase={isBase}
                 isRotatedLandscape={isPortraitViewport}
                 scrollContainerRef={scrollContainerRef}
@@ -862,7 +865,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       </div>
 
       {/* Tap-to-Place Image Banner */}
-      {pendingImageFile && !isBase && (
+      {pendingImageFile && (
         <div
           role="status"
           className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-amber-400/70 text-slate-100 text-xs shadow-xl backdrop-blur-md max-w-[90%]"
@@ -902,7 +905,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
         >
           <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
-          <span>Base is read-only. Create a variant to highlight or capture photos.</span>
+          <span>Base is read-only for highlights. Create a variant to highlight.</span>
           <button
             type="button"
             onClick={() => {
@@ -1128,8 +1131,8 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                     <span className="font-medium text-slate-200">Variant</span>
                     <span className="font-mono-num">
                       {isBase
-                        ? 'Base · Read-only'
-                        : `${activeVariant.highlights.length} hl · ${(activeVariant.imagePins ?? []).length} img`}
+                        ? `Base · ${universalImagePins.length} img`
+                        : `${activeVariant.highlights.length} hl · ${universalImagePins.length} img`}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -1161,10 +1164,6 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                       type="button"
                       onClick={() => {
                         setIsMenuOpen(false);
-                        if (isBase) {
-                          setBaseNoticeVisible(true);
-                          return;
-                        }
                         setIsCameraOpen(true);
                       }}
                       className="col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
@@ -1273,21 +1272,19 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                 {activePin.originalName}
               </span>
               <div className="flex items-center gap-2 shrink-0">
-                {!isBase && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const targetId = activePin.id;
-                      setActivePin(null);
-                      onRemoveImagePin(targetId);
-                    }}
-                    aria-label="Delete image pin"
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-red-300 bg-red-950/60 hover:bg-red-900/70 border border-red-900/60 rounded-lg transition-colors"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>Delete</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetId = activePin.id;
+                    setActivePin(null);
+                    onRemoveImagePin(targetId);
+                  }}
+                  aria-label="Delete image pin"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-red-300 bg-red-950/60 hover:bg-red-900/70 border border-red-900/60 rounded-lg transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Delete</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setActivePin(null)}

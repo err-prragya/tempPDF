@@ -109,3 +109,39 @@ test('serializeFolderMetadata writes updated records while keeping existing map 
   assert.ok(reparsed.documents['archived.pdf']);
   assert.equal(reparsed.updatedAt, 500);
 });
+
+test('parseFolderMetadata migrates and deduplicates legacy per-variant imagePins into universal doc.imagePins', () => {
+  const legacyPin = {
+    id: 'img_legacy_1',
+    pageIndex: 0,
+    x: 0.3,
+    y: 0.5,
+    assetFileName: 'asset_legacy.png',
+    originalName: 'photo.png',
+    mimeType: 'image/png',
+    createdAt: 10,
+  };
+  const parsed = parseFolderMetadata(
+    JSON.stringify({
+      version: 1,
+      updatedAt: 200,
+      documents: {
+        'legacy.pdf': {
+          id: 'doc_leg',
+          name: 'legacy.pdf',
+          variants: [
+            { id: 'base', name: 'Base', isBase: true, highlights: [], imagePins: [], createdAt: 1 },
+            { id: 'v1', name: 'V1', isBase: false, highlights: [], imagePins: [legacyPin], createdAt: 2 },
+            { id: 'v2', name: 'V1 Copy', isBase: false, highlights: [], imagePins: [{ ...legacyPin, id: 'img_legacy_dup' }], createdAt: 3 },
+          ],
+        },
+      },
+    })
+  );
+
+  const doc = parsed.documents['legacy.pdf'];
+  assert.equal(doc.imagePins?.length, 1);
+  assert.equal(doc.imagePins?.[0].assetFileName, 'asset_legacy.png');
+  assert.equal(doc.variants[1].imagePins.length, 0);
+  assert.equal(doc.variants[2].imagePins.length, 0);
+});

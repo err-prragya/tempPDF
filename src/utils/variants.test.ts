@@ -13,7 +13,10 @@ import {
   renameVariantAt,
   undoLastHighlight,
   addImagePinToVariant,
+  addUniversalImagePinToDocument,
+  getDocumentImagePins,
   removeImagePinFromVariant,
+  removeUniversalImagePinFromDocument,
   isAssetReferencedInDocuments,
 } from './variants';
 import { HIGHLIGHT_COLORS, hexToRgba } from './colors';
@@ -204,4 +207,47 @@ test('image pins respect Base immutability, clamp coordinates, duplicate cleanly
     isAssetReferencedInDocuments([{ ...doc, variants: [base, v1Removed] }], 'asset_1.png'),
     false
   );
+});
+
+test('universal document image pins apply across Base, existing variants, and newly created variants', () => {
+  const base = createBaseVariant(1000);
+  const v1 = createNewVariant([base], 1001);
+  let doc = {
+    id: 'doc_univ',
+    name: 'universal.pdf',
+    fileSize: 100,
+    pageCount: 2,
+    addedAt: 1000,
+    greyscale: false,
+    opacity: 1,
+    highlightColor: '#FDE047',
+    highlightWidth: DEFAULT_HIGHLIGHT_WIDTH,
+    activeVariantIndex: 1,
+    variants: [base, v1],
+  };
+
+  const pin = {
+    id: 'img_u1',
+    pageIndex: 1,
+    x: 0.5,
+    y: 0.4,
+    assetFileName: 'asset_u1.png',
+    originalName: 'chart.png',
+    mimeType: 'image/png',
+    createdAt: 1002,
+  };
+
+  doc = addUniversalImagePinToDocument(doc, pin);
+  assert.equal(getDocumentImagePins(doc).length, 1);
+  assert.equal(isAssetReferencedInDocuments([doc], 'asset_u1.png'), true);
+
+  // Adding a new variant still retains access to universal document pins
+  const v2 = createNewVariant(doc.variants, 1003);
+  doc = { ...doc, variants: [...doc.variants, v2] };
+  assert.equal(getDocumentImagePins(doc).length, 1);
+
+  // Removing universal pin clears it from the document and releases asset reference
+  doc = removeUniversalImagePinFromDocument(doc, 'img_u1');
+  assert.equal(getDocumentImagePins(doc).length, 0);
+  assert.equal(isAssetReferencedInDocuments([doc], 'asset_u1.png'), false);
 });

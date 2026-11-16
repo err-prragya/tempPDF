@@ -228,11 +228,69 @@ export function removeImagePinFromVariant(variant: PdfVariant, pinId: string): P
   };
 }
 
+export function getDocumentImagePins(doc: PdfDocumentRecord): ImagePin[] {
+  const seenIds = new Set<string>();
+  const seenSignatures = new Set<string>();
+  const merged: ImagePin[] = [];
+
+  const pushUnique = (pin: ImagePin) => {
+    const sig = `${pin.assetFileName}::${pin.pageIndex}::${pin.x.toFixed(4)}::${pin.y.toFixed(4)}`;
+    if (seenIds.has(pin.id) || seenSignatures.has(sig)) return;
+    seenIds.add(pin.id);
+    seenSignatures.add(sig);
+    merged.push(pin);
+  };
+
+  for (const pin of doc.imagePins ?? []) {
+    pushUnique(pin);
+  }
+  for (const variant of doc.variants) {
+    for (const pin of variant.imagePins ?? []) {
+      pushUnique(pin);
+    }
+  }
+  return merged;
+}
+
+export function addUniversalImagePinToDocument(
+  doc: PdfDocumentRecord,
+  pin: ImagePin
+): PdfDocumentRecord {
+  const normalizedPin: ImagePin = {
+    ...pin,
+    x: Math.max(0.02, Math.min(0.98, pin.x)),
+    y: Math.max(0.02, Math.min(0.98, pin.y)),
+  };
+  const existing = getDocumentImagePins(doc);
+  return {
+    ...doc,
+    imagePins: [...existing, normalizedPin],
+  };
+}
+
+export function removeUniversalImagePinFromDocument(
+  doc: PdfDocumentRecord,
+  pinId: string
+): PdfDocumentRecord {
+  return {
+    ...doc,
+    imagePins: getDocumentImagePins(doc).filter((p) => p.id !== pinId),
+    variants: doc.variants.map((v) =>
+      v.imagePins && v.imagePins.length > 0
+        ? { ...v, imagePins: v.imagePins.filter((p) => p.id !== pinId) }
+        : v
+    ),
+  };
+}
+
 export function isAssetReferencedInDocuments(
   documents: PdfDocumentRecord[],
   assetFileName: string
 ): boolean {
   for (const doc of documents) {
+    if ((doc.imagePins ?? []).some((pin) => pin.assetFileName === assetFileName)) {
+      return true;
+    }
     for (const variant of doc.variants) {
       if ((variant.imagePins ?? []).some((pin) => pin.assetFileName === assetFileName)) {
         return true;

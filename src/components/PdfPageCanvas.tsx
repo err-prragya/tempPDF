@@ -374,7 +374,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         // ignore
       }
     } else if (state.mode === 'pending' && e.type === 'pointerup') {
-      if (isPlacingImage && !isBase) {
+      if (isPlacingImage) {
         lastTapRef.current = null;
         const nx = state.startLocalX / Math.max(1, state.pageWidth);
         const ny = state.startLocalY / Math.max(1, state.pageHeight);
@@ -436,7 +436,7 @@ export const PdfPageCanvas: React.FC<PdfPageCanvasProps> = ({
         touchAction: isRotatedLandscape ? 'none' : 'pan-y',
       }}
       className={`relative bg-white select-none overflow-hidden shadow-sm border-b border-neutral-800/30 ${
-        isBase ? 'cursor-default' : isPlacingImage ? 'cursor-copy' : 'cursor-crosshair'
+        isPlacingImage ? 'cursor-copy' : isBase ? 'cursor-default' : 'cursor-crosshair'
       }`}
     >
       {/* Dimmed Whole-PDF Layer controlled by Opacity + Greyscale */}

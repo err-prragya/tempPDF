@@ -42,5 +42,6 @@ export interface PdfDocumentRecord {
   highlightWidth: number; // Normalized highlight band thickness [0.008..0.048]
   activeVariantIndex: number;
   variants: PdfVariant[];
+  imagePins?: ImagePin[]; // Universal image pins shared across all variants
   isSample?: boolean;
 }

@@ -23,16 +23,17 @@ import { validatePdfHeader } from './utils/pdfLoader';
 import { createSamplePdfBytes } from './utils/samplePdf';
 import {
   addHighlightToVariant,
-  addImagePinToVariant,
+  addUniversalImagePinToDocument,
   clampHighlightWidth,
   clampOpacity,
   createId,
   createNewVariant,
   deleteVariantAt,
   duplicateVariant,
+  getDocumentImagePins,
   isAssetReferencedInDocuments,
   removeHighlightFromVariant,
-  removeImagePinFromVariant,
+  removeUniversalImagePinFromDocument,
   renameVariantAt,
   undoLastHighlight,
   updateHighlightStarsInVariant,
@@ -655,41 +656,14 @@ export default function App() {
         onSaveImageAsset={handleSaveImageAsset}
         onLoadImageAssetUrl={handleLoadImageAssetUrl}
         onAddImagePin={(pin: ImagePin) =>
-          updateActiveDocument((doc) => {
-            const safeIdx = Math.min(
-              Math.max(0, doc.activeVariantIndex),
-              Math.max(0, doc.variants.length - 1)
-            );
-            return {
-              ...doc,
-              variants: doc.variants.map((v, idx) =>
-                idx === safeIdx ? addImagePinToVariant(v, pin) : v
-              ),
-            };
-          })
+          updateActiveDocument((doc) => addUniversalImagePinToDocument(doc, pin))
         }
         onRemoveImagePin={(pinId: string) => {
-          const safeIdx = Math.min(
-            Math.max(0, activeDoc.activeVariantIndex),
-            Math.max(0, activeDoc.variants.length - 1)
-          );
-          const removedPin = (activeDoc.variants[safeIdx]?.imagePins ?? []).find(
-            (p) => p.id === pinId
-          );
+          const removedPin = getDocumentImagePins(activeDoc).find((p) => p.id === pinId);
           setDocuments((prev) => {
-            const nextDocs = prev.map((doc) => {
-              if (doc.id !== activeDocId) return doc;
-              const idx = Math.min(
-                Math.max(0, doc.activeVariantIndex),
-                Math.max(0, doc.variants.length - 1)
-              );
-              return {
-                ...doc,
-                variants: doc.variants.map((v, i) =>
-                  i === idx ? removeImagePinFromVariant(v, pinId) : v
-                ),
-              };
-            });
+            const nextDocs = prev.map((doc) =>
+              doc.id === activeDocId ? removeUniversalImagePinFromDocument(doc, pinId) : doc
+            );
             persistMetadataToFolder(nextDocs);
             if (removedPin) {
               cleanupUnreferencedAssets([removedPin.assetFileName], nextDocs);
