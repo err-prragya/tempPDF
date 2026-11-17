@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Camera,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Copy,
   Lock,
   Maximize2,
@@ -28,6 +30,16 @@ import {
   toggleStarFilter,
 } from '../utils/highlightFilter';
 import { openPdfHandle, type LoadedPdfProxy, type ParsedPdfHandle } from '../utils/pdfLoader';
+import {
+  captureScrollAnchor,
+  computePageJumpScrollTop,
+  computePageLayouts,
+  computeVisiblePageWindow,
+  findPageIndexAtOffset,
+  restoreScrollTopFromAnchor,
+  type PageLayoutItem,
+  type ScrollAnchor,
+} from '../utils/pdfVirtualization';
 import {
   createId,
   DEFAULT_HIGHLIGHT_WIDTH,
@@ -65,6 +77,9 @@ interface LandscapeReaderProps {
   onRemoveImagePin: (pinId: string) => void;
 }
 
+const EMPTY_HIGHLIGHTS: HighlightRect[] = [];
+const EMPTY_PINS: ImagePin[] = [];
+
 export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   documentRecord,
   pdfSource,
@@ -94,11 +109,29 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const colorPickerRef = useRef<HTMLDivElement>(null);
   const navMenuRef = useRef<HTMLDivElement>(null);
   const filterGroupRef = useRef<HTMLDivElement>(null);
+  const pageNavRef = useRef<HTMLDivElement>(null);
   const onPagesResolvedRef = useRef(onPagesResolved);
   onPagesResolvedRef.current = onPagesResolved;
+  const onAddHighlightRef = useRef(onAddHighlight);
+  onAddHighlightRef.current = onAddHighlight;
+  const onUpdateHighlightStarsRef = useRef(onUpdateHighlightStars);
+  onUpdateHighlightStarsRef.current = onUpdateHighlightStars;
+  const onRemoveHighlightRef = useRef(onRemoveHighlight);
+  onRemoveHighlightRef.current = onRemoveHighlight;
+
+  const handleAddHighlight = useCallback((hl: HighlightRect) => {
+    onAddHighlightRef.current(hl);
+  }, []);
+  const handleUpdateHighlightStars = useCallback((id: string, stars: number) => {
+    onUpdateHighlightStarsRef.current(id, stars);
+  }, []);
+  const handleRemoveHighlight = useCallback((id: string) => {
+    onRemoveHighlightRef.current(id);
+  }, []);
 
   const [pdfProxy, setPdfProxy] = useState<LoadedPdfProxy | null>(null);
   const [defaultPageAspectRatio, setDefaultPageAspectRatio] = useState<number>(0.7727);
+  const [pageAspectRatios, setPageAspectRatios] = useState<Record<number, number>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<{ w: number; h: number }>({
     w: typeof window !== 'undefined' ? window.innerWidth : 1280,
@@ -106,6 +139,9 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   });
   const [containerWidth, setContainerWidth] = useState<number>(
     typeof window !== 'undefined' ? Math.max(window.innerWidth, window.innerHeight) : 1280
+  );
+  const [containerHeight, setContainerHeight] = useState<number>(
+    typeof window !== 'undefined' ? Math.min(window.innerWidth, window.innerHeight) : 720
   );
   const [isFullscreen, setIsFullscreen] = useState<boolean>(
     typeof document !== 'undefined' && Boolean(document.fullscreenElement)
@@ -129,6 +165,26 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const [focusedHighlightId, setFocusedHighlightId] = useState<string | null>(null);
   const [selectedHighlightId, setSelectedHighlightId] = useState<string | null>(null);
 
+  // Page-based navigation & virtualization state
+  const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
+  const [visibleRange, setVisibleRange] = useState<{ start: number; end: number }>({
+    start: 0,
+    end: 3,
+  });
+  const [isPageNavOpen, setIsPageNavOpen] = useState(false);
+  const [pageJumpInput, setPageJumpInput] = useState('');
+
+  const currentPageIndexRef = useRef<number>(0);
+  const scrollAnchorRef = useRef<ScrollAnchor>({ pageIndex: 0, offsetInPageRatio: 0 });
+  const pendingRestoreAnchorRef = useRef<ScrollAnchor | null>(null);
+  const cameraReturnAnchorRef = useRef<ScrollAnchor | null>(null);
+  const isCameraOpenRef = useRef<boolean>(false);
+  const wasCameraOpenRef = useRef<boolean>(false);
+  const layoutsRef = useRef<PageLayoutItem[]>([]);
+  const scrollRafRef = useRef<number | null>(null);
+
+  isCameraOpenRef.current = isCameraOpen;
+
   const isPortraitViewport = viewport.h > viewport.w;
   const landscapeWidth = isPortraitViewport ? viewport.h : viewport.w;
   const landscapeHeight = isPortraitViewport ? viewport.w : viewport.h;
@@ -137,6 +193,8 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
 
   useEffect(() => {
     const handleResize = () => {
+      // Avoid layout/orientation churn while portrait CameraCropModal is open
+      if (isCameraOpenRef.current) return;
       setViewport({ w: window.innerWidth, h: window.innerHeight });
     };
     const handleFsChange = () => {
@@ -151,9 +209,43 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     };
   }, []);
 
+  // Re-sync viewport once CameraCropModal closes so orientation/size settles cleanly
+  useEffect(() => {
+    if (isCameraOpen) {
+      wasCameraOpenRef.current = true;
+      return;
+    }
+    if (wasCameraOpenRef.current) {
+      wasCameraOpenRef.current = false;
+      setViewport({ w: window.innerWidth, h: window.innerHeight });
+      const el = scrollContainerRef.current;
+      if (el && cameraReturnAnchorRef.current) {
+        const targetAnchor = cameraReturnAnchorRef.current;
+        pendingRestoreAnchorRef.current = targetAnchor;
+        const restore = () => {
+          if (!scrollContainerRef.current || layoutsRef.current.length === 0) return;
+          const nextTop = restoreScrollTopFromAnchor(layoutsRef.current, targetAnchor);
+          scrollContainerRef.current.scrollTop = nextTop;
+        };
+        restore();
+        const t = window.setTimeout(restore, 140);
+        return () => window.clearTimeout(t);
+      }
+    }
+  }, [isCameraOpen]);
+
   // Close popovers, cancel image placement, or close lightbox on Escape / outside pointerdown
   useEffect(() => {
-    if (!isColorPickerOpen && !isMenuOpen && !isFilterOpen && !pendingImageFile && !activePin) return;
+    if (
+      !isColorPickerOpen &&
+      !isMenuOpen &&
+      !isFilterOpen &&
+      !isPageNavOpen &&
+      !pendingImageFile &&
+      !activePin
+    ) {
+      return;
+    }
     const handleOutside = (e: PointerEvent) => {
       const target = e.target as Node;
       if (isColorPickerOpen && colorPickerRef.current && !colorPickerRef.current.contains(target)) {
@@ -165,12 +257,16 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       if (isFilterOpen && filterGroupRef.current && !filterGroupRef.current.contains(target)) {
         setIsFilterOpen(false);
       }
+      if (isPageNavOpen && pageNavRef.current && !pageNavRef.current.contains(target)) {
+        setIsPageNavOpen(false);
+      }
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setIsColorPickerOpen(false);
         setIsMenuOpen(false);
         setIsFilterOpen(false);
+        setIsPageNavOpen(false);
         setPendingImageFile(null);
         setActivePin(null);
       }
@@ -181,20 +277,34 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       window.removeEventListener('pointerdown', handleOutside);
       window.removeEventListener('keydown', handleKey);
     };
-  }, [isColorPickerOpen, isMenuOpen, isFilterOpen, pendingImageFile, activePin]);
+  }, [isColorPickerOpen, isMenuOpen, isFilterOpen, isPageNavOpen, pendingImageFile, activePin]);
 
+  // Measure scroll container dimensions while preserving exact scroll anchor on resize
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
 
-    const updateWidth = () => {
-      if (el.clientWidth > 0) {
-        setContainerWidth(el.clientWidth);
+    const updateSize = () => {
+      if (isCameraOpenRef.current) return;
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w > 0) {
+        setContainerWidth((prevW) => {
+          if (prevW !== w && layoutsRef.current.length > 0) {
+            pendingRestoreAnchorRef.current =
+              cameraReturnAnchorRef.current ??
+              captureScrollAnchor(layoutsRef.current, el.scrollTop);
+          }
+          return w;
+        });
+      }
+      if (h > 0) {
+        setContainerHeight((prevH) => (prevH !== h ? h : prevH));
       }
     };
-    updateWidth();
+    updateSize();
 
-    const ro = new ResizeObserver(updateWidth);
+    const ro = new ResizeObserver(updateSize);
     ro.observe(el);
     return () => ro.disconnect();
   }, [isPortraitViewport, viewport.w, viewport.h]);
@@ -203,7 +313,13 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     let active = true;
     let handle: ParsedPdfHandle | null = null;
     setPdfProxy(null);
+    setPageAspectRatios({});
     setLoadError(null);
+    setCurrentPageIndex(0);
+    currentPageIndexRef.current = 0;
+    scrollAnchorRef.current = { pageIndex: 0, offsetInPageRatio: 0 };
+    cameraReturnAnchorRef.current = null;
+    pendingRestoreAnchorRef.current = null;
 
     (async () => {
       try {
@@ -241,6 +357,138 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       }
     };
   }, [pdfSource]);
+
+  const numPages = pdfProxy?.numPages ?? 0;
+
+  const { layouts, totalHeight } = useMemo(
+    () =>
+      computePageLayouts(
+        numPages,
+        containerWidth,
+        pageAspectRatios,
+        defaultPageAspectRatio
+      ),
+    [numPages, containerWidth, pageAspectRatios, defaultPageAspectRatio]
+  );
+
+  layoutsRef.current = layouts;
+
+  // Compute current virtualized window spacer heights
+  const visibleWindow = useMemo(() => {
+    if (layouts.length === 0) {
+      return { startIndex: 0, endIndex: -1, topSpacerHeight: 0, bottomSpacerHeight: 0 };
+    }
+    const safeStart = Math.min(Math.max(0, visibleRange.start), layouts.length - 1);
+    const safeEnd = Math.min(Math.max(safeStart, visibleRange.end), layouts.length - 1);
+    const topSpacerHeight = layouts[safeStart].top;
+    const bottomSpacerHeight = Math.max(0, totalHeight - layouts[safeEnd].bottom);
+    return {
+      startIndex: safeStart,
+      endIndex: safeEnd,
+      topSpacerHeight,
+      bottomSpacerHeight,
+    };
+  }, [layouts, totalHeight, visibleRange.start, visibleRange.end]);
+
+  // Synchronize visible window & scroll anchor from actual scrollTop
+  const syncWindowFromScroll = useCallback(
+    (layoutList: PageLayoutItem[], vpH: number) => {
+      const el = scrollContainerRef.current;
+      if (!el || layoutList.length === 0) return;
+
+      const st = el.scrollTop;
+      const win = computeVisiblePageWindow(layoutList, st, vpH, 2);
+      const focusIdx = findPageIndexAtOffset(layoutList, st + vpH * 0.35);
+
+      currentPageIndexRef.current = focusIdx;
+      scrollAnchorRef.current = captureScrollAnchor(layoutList, st);
+
+      setCurrentPageIndex((prev) => (prev !== focusIdx ? focusIdx : prev));
+      setVisibleRange((prev) =>
+        prev.start === win.startIndex && prev.end === win.endIndex
+          ? prev
+          : { start: win.startIndex, end: win.endIndex }
+      );
+    },
+    []
+  );
+
+  // Restore scrollTop synchronously after width/layout changes or camera close
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || layouts.length === 0) return;
+
+    if (pendingRestoreAnchorRef.current) {
+      const targetAnchor = pendingRestoreAnchorRef.current;
+      pendingRestoreAnchorRef.current = null;
+      const targetTop = restoreScrollTopFromAnchor(layouts, targetAnchor);
+      if (Math.abs(el.scrollTop - targetTop) > 1) {
+        el.scrollTop = targetTop;
+      }
+    }
+
+    syncWindowFromScroll(layouts, containerHeight);
+  }, [layouts, containerHeight, syncWindowFromScroll]);
+
+  // Attach rAF-throttled passive scroll listener for 60fps long-PDF virtualization
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !pdfProxy) return;
+
+    const handleScroll = () => {
+      if (isCameraOpenRef.current) return;
+      if (scrollRafRef.current !== null) return;
+      scrollRafRef.current = window.requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        syncWindowFromScroll(layoutsRef.current, el.clientHeight || containerHeight);
+      });
+    };
+
+    const clearReturnAnchorOnUserScroll = () => {
+      if (!isCameraOpenRef.current) {
+        cameraReturnAnchorRef.current = null;
+      }
+      activeScrollTargetRef.current = null;
+    };
+
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    el.addEventListener('wheel', clearReturnAnchorOnUserScroll, { passive: true });
+    el.addEventListener('touchstart', clearReturnAnchorOnUserScroll, { passive: true });
+
+    return () => {
+      el.removeEventListener('scroll', handleScroll);
+      el.removeEventListener('wheel', clearReturnAnchorOnUserScroll);
+      el.removeEventListener('touchstart', clearReturnAnchorOnUserScroll);
+      if (scrollRafRef.current !== null) {
+        window.cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+  }, [pdfProxy, containerHeight, syncWindowFromScroll]);
+
+  // Compensate scrollTop cleanly if a newly visited page has a different aspect ratio
+  const handlePageAspectRatio = useCallback(
+    (pageIdx: number, nextRatio: number) => {
+      if (!Number.isFinite(nextRatio) || nextRatio <= 0.1 || nextRatio >= 5) return;
+      setPageAspectRatios((prev) => {
+        const existing = prev[pageIdx] ?? defaultPageAspectRatio;
+        if (Math.abs(existing - nextRatio) <= 0.002) {
+          return prev;
+        }
+        const el = scrollContainerRef.current;
+        if (el && pageIdx < currentPageIndexRef.current) {
+          const oldH = Math.max(1, Math.round(containerWidth * existing));
+          const newH = Math.max(1, Math.round(containerWidth * nextRatio));
+          const delta = newH - oldH;
+          if (delta !== 0) {
+            el.scrollTop = Math.max(0, el.scrollTop + delta);
+          }
+        }
+        return { ...prev, [pageIdx]: nextRatio };
+      });
+    },
+    [containerWidth, defaultPageAspectRatio]
+  );
 
   useEffect(() => {
     if (!baseNoticeVisible) return;
@@ -283,12 +531,12 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     onExit();
   };
 
-  const handleUndoTrigger = () => {
+  const handleUndoTrigger = useCallback(() => {
     const didUndo = onUndoHighlight();
     if (didUndo) {
       setUndoToastMessage('Undid last highlight');
     }
-  };
+  }, [onUndoHighlight]);
 
   const variants = documentRecord.variants;
   const safeIndex = Math.min(
@@ -302,12 +550,34 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     [documentRecord]
   );
 
+  // Pre-group highlights & universal image pins by pageIndex (O(1) lookup per mounted page)
+  const highlightsByPage = useMemo(() => {
+    const map = new Map<number, HighlightRect[]>();
+    for (const hl of activeVariant?.highlights ?? []) {
+      const list = map.get(hl.pageIndex);
+      if (list) list.push(hl);
+      else map.set(hl.pageIndex, [hl]);
+    }
+    return map;
+  }, [activeVariant?.highlights]);
+
+  const pinsByPage = useMemo(() => {
+    const map = new Map<number, ImagePin[]>();
+    for (const pin of universalImagePins) {
+      const list = map.get(pin.pageIndex);
+      if (list) list.push(pin);
+      else map.set(pin.pageIndex, [pin]);
+    }
+    return map;
+  }, [universalImagePins]);
+
   useEffect(() => {
     setIsRenaming(false);
     setIsCameraOpen(false);
     setPendingImageFile(null);
     setActivePin(null);
     setIsFilterOpen(false);
+    setIsPageNavOpen(false);
     setNavIndex(-1);
     setFocusedHighlightId(null);
     setSelectedHighlightId(null);
@@ -332,17 +602,11 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     setNavIndex(idx);
   }, [filteredHighlights, focusedHighlightId]);
 
-  // Keep target highlight centered if lazy-loaded pages change height during scroll
+  // Keep target highlight centered if newly mounted pages adjust aspect ratios during scroll
   useEffect(() => {
     const scrollEl = scrollContainerRef.current;
     const pagesEl = pagesContainerRef.current;
     if (!scrollEl || !pagesEl || !pdfProxy) return;
-
-    const cancelActiveTarget = () => {
-      activeScrollTargetRef.current = null;
-    };
-    scrollEl.addEventListener('wheel', cancelActiveTarget, { passive: true });
-    scrollEl.addEventListener('touchstart', cancelActiveTarget, { passive: true });
 
     const ro = new ResizeObserver(() => {
       const target = activeScrollTargetRef.current;
@@ -351,14 +615,12 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
         activeScrollTargetRef.current = null;
         return;
       }
-      const pageEl = scrollEl.querySelector(
-        `[data-testid="pdf-page-${target.highlight.pageIndex + 1}"]`
-      ) as HTMLElement | null;
-      if (!pageEl) return;
+      const pageLayout = layoutsRef.current[target.highlight.pageIndex];
+      if (!pageLayout) return;
       const alignedTop = Math.max(
         0,
-        pageEl.offsetTop +
-          target.highlight.yCenter * pageEl.offsetHeight -
+        pageLayout.top +
+          target.highlight.yCenter * pageLayout.height -
           scrollEl.clientHeight * 0.45
       );
       if (Math.abs(scrollEl.scrollTop - alignedTop) > 4) {
@@ -369,28 +631,61 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     ro.observe(pagesEl);
     return () => {
       ro.disconnect();
-      scrollEl.removeEventListener('wheel', cancelActiveTarget);
-      scrollEl.removeEventListener('touchstart', cancelActiveTarget);
     };
   }, [pdfProxy]);
 
+  const jumpToPage = useCallback((targetPageIdx: number) => {
+    const scrollEl = scrollContainerRef.current;
+    const layoutList = layoutsRef.current;
+    if (!scrollEl || layoutList.length === 0) return;
+
+    const clampedIdx = Math.min(Math.max(0, targetPageIdx), layoutList.length - 1);
+    const targetTop = computePageJumpScrollTop(layoutList, clampedIdx);
+    activeScrollTargetRef.current = null;
+    cameraReturnAnchorRef.current = null;
+    scrollEl.scrollTo({ top: targetTop, behavior: 'auto' });
+    syncWindowFromScroll(layoutList, scrollEl.clientHeight || containerHeight);
+  }, [containerHeight, syncWindowFromScroll]);
+
+  // PageUp / PageDown fast page stepping when not typing in an input
+  useEffect(() => {
+    if (!pdfProxy || numPages <= 1) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isCameraOpen || activePin) return;
+      const activeTag = (document.activeElement as HTMLElement | null)?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+      if (e.key === 'PageDown') {
+        e.preventDefault();
+        jumpToPage(currentPageIndexRef.current + 1);
+      } else if (e.key === 'PageUp') {
+        e.preventDefault();
+        jumpToPage(currentPageIndexRef.current - 1);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [pdfProxy, numPages, isCameraOpen, activePin, jumpToPage]);
+
   const navigateToHighlight = (hl: HighlightRect, matchIdx: number) => {
     const scrollEl = scrollContainerRef.current;
-    if (scrollEl) {
-      const pageEl = scrollEl.querySelector(
-        `[data-testid="pdf-page-${hl.pageIndex + 1}"]`
-      ) as HTMLElement | null;
-      if (pageEl) {
-        activeScrollTargetRef.current = {
-          highlight: hl,
-          expiresAt: Date.now() + 950,
-        };
-        const targetY =
-          pageEl.offsetTop + hl.yCenter * pageEl.offsetHeight - scrollEl.clientHeight * 0.45;
-        scrollEl.scrollTo({
-          top: Math.max(0, targetY),
-          behavior: 'smooth',
-        });
+    const pageLayout = layoutsRef.current[hl.pageIndex];
+    if (scrollEl && pageLayout) {
+      activeScrollTargetRef.current = {
+        highlight: hl,
+        expiresAt: Date.now() + 950,
+      };
+      cameraReturnAnchorRef.current = null;
+      const targetY = Math.max(
+        0,
+        pageLayout.top + hl.yCenter * pageLayout.height - scrollEl.clientHeight * 0.45
+      );
+      const isNearby = Math.abs(targetY - scrollEl.scrollTop) < scrollEl.clientHeight * 2.5;
+      scrollEl.scrollTo({
+        top: targetY,
+        behavior: isNearby ? 'smooth' : 'auto',
+      });
+      if (!isNearby) {
+        syncWindowFromScroll(layoutsRef.current, scrollEl.clientHeight || containerHeight);
       }
     }
     setSelectedHighlightId(null);
@@ -402,6 +697,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     if (filteredHighlights.length === 0) return;
     setIsMenuOpen(false);
     setIsColorPickerOpen(false);
+    setIsPageNavOpen(false);
     const nextIdx = stepFilteredNavigationFromHighlight(
       filteredHighlights,
       activeVariant?.highlights ?? [],
@@ -414,15 +710,18 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     }
   };
 
-  const handleSelectHighlightOnPage = (toolbarId: string | null, tappedId?: string | null) => {
-    setSelectedHighlightId(toolbarId);
-    if (tappedId) {
-      activeScrollTargetRef.current = null;
-      setFocusedHighlightId(tappedId);
-      const matchIdx = filteredHighlights.findIndex((h) => h.id === tappedId);
-      setNavIndex(matchIdx);
-    }
-  };
+  const handleSelectHighlightOnPage = useCallback(
+    (toolbarId: string | null, tappedId?: string | null) => {
+      setSelectedHighlightId(toolbarId);
+      if (tappedId) {
+        activeScrollTargetRef.current = null;
+        setFocusedHighlightId(tappedId);
+        const matchIdx = filteredHighlights.findIndex((h) => h.id === tappedId);
+        setNavIndex(matchIdx);
+      }
+    },
+    [filteredHighlights]
+  );
 
   useEffect(() => {
     if (!activePin) {
@@ -449,32 +748,65 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     };
   }, [activePin, onLoadImageAssetUrl]);
 
+  const handleOpenCameraCapture = () => {
+    const el = scrollContainerRef.current;
+    if (el && layoutsRef.current.length > 0) {
+      const anchor = captureScrollAnchor(layoutsRef.current, el.scrollTop);
+      scrollAnchorRef.current = anchor;
+      cameraReturnAnchorRef.current = anchor;
+    } else {
+      cameraReturnAnchorRef.current = scrollAnchorRef.current;
+    }
+    setIsMenuOpen(false);
+    setIsPageNavOpen(false);
+    setIsFilterOpen(false);
+    setIsColorPickerOpen(false);
+    setIsCameraOpen(true);
+  };
+
   const handleCroppedCameraFile = (file: File) => {
     setIsCameraOpen(false);
     setPendingImageFile(file);
   };
 
-  const handlePlaceImageAt = async (pageIndex: number, nx: number, ny: number) => {
-    if (!pendingImageFile || isSavingImage) return;
-    const fileToSave = pendingImageFile;
-    setIsSavingImage(true);
-    try {
-      const saved = await onSaveImageAsset(fileToSave);
-      onAddImagePin({
-        id: createId('img'),
-        pageIndex,
-        x: nx,
-        y: ny,
-        assetFileName: saved.assetFileName,
-        originalName: saved.originalName,
-        mimeType: saved.mimeType,
-        createdAt: Date.now(),
-      });
-      setPendingImageFile(null);
-    } finally {
-      setIsSavingImage(false);
-    }
-  };
+  const handlePlaceImageAt = useCallback(
+    async (pageIndex: number, nx: number, ny: number) => {
+      if (!pendingImageFile || isSavingImage) return;
+      const fileToSave = pendingImageFile;
+      // Preserve exact scroll anchor during pin state commit
+      const el = scrollContainerRef.current;
+      if (el && layoutsRef.current.length > 0) {
+        pendingRestoreAnchorRef.current = captureScrollAnchor(layoutsRef.current, el.scrollTop);
+      }
+      setIsSavingImage(true);
+      try {
+        const saved = await onSaveImageAsset(fileToSave);
+        onAddImagePin({
+          id: createId('img'),
+          pageIndex,
+          x: nx,
+          y: ny,
+          assetFileName: saved.assetFileName,
+          originalName: saved.originalName,
+          mimeType: saved.mimeType,
+          createdAt: Date.now(),
+        });
+        setPendingImageFile(null);
+        cameraReturnAnchorRef.current = null;
+      } finally {
+        setIsSavingImage(false);
+      }
+    },
+    [pendingImageFile, isSavingImage, onSaveImageAsset, onAddImagePin]
+  );
+
+  const handleOpenImagePin = useCallback((pin: ImagePin) => {
+    setActivePin(pin);
+  }, []);
+
+  const handleBaseEditAttempt = useCallback(() => {
+    setBaseNoticeVisible(true);
+  }, []);
 
   const startRename = () => {
     if (isBase || !activeVariant) return;
@@ -491,10 +823,6 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     }
     setIsRenaming(false);
   };
-
-  const pageNumbers = pdfProxy
-    ? Array.from({ length: pdfProxy.numPages }, (_, i) => i + 1)
-    : [];
 
   const shellStyle: React.CSSProperties = isPortraitViewport
     ? {
@@ -517,6 +845,11 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     HIGHLIGHT_COLORS.find((c) => c.hex.toLowerCase() === activeColor.toLowerCase()) ??
     HIGHLIGHT_COLORS[0];
 
+  const mountedLayouts =
+    visibleWindow.endIndex >= visibleWindow.startIndex
+      ? layouts.slice(visibleWindow.startIndex, visibleWindow.endIndex + 1)
+      : [];
+
   return (
     <>
     <div
@@ -526,12 +859,12 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       style={shellStyle}
       className="z-50 bg-neutral-950 text-slate-100 flex flex-col overflow-hidden"
     >
-      {/* Full-Height Width-Locked Scrollable PDF Viewport */}
+      {/* Full-Height Width-Locked Virtualized Scrollable PDF Viewport */}
       <div
         ref={scrollContainerRef}
         data-testid="pdf-scroll-container"
         className="relative flex-1 overflow-y-scroll overflow-x-hidden bg-neutral-900 pb-12"
-        style={{ touchAction: 'pan-y' }}
+        style={{ touchAction: 'pan-y', overflowAnchor: 'none' }}
       >
         {loadError ? (
           <div className="h-full flex items-center justify-center p-8">
@@ -552,41 +885,206 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           </div>
         ) : (
           <div ref={pagesContainerRef} className="flex flex-col items-stretch w-full">
-            {pageNumbers.map((pageNum, idx) => (
+            {visibleWindow.topSpacerHeight > 0 && (
+              <div
+                aria-hidden="true"
+                style={{ height: `${visibleWindow.topSpacerHeight}px`, flexShrink: 0 }}
+              />
+            )}
+            {mountedLayouts.map((layout) => (
               <PdfPageCanvas
-                key={`${documentRecord.id}-p${pageNum}`}
+                key={`${documentRecord.id}-p${layout.pageNumber}`}
                 pdf={pdfProxy}
-                pageNumber={pageNum}
-                pageIndex={idx}
-                targetWidth={containerWidth}
-                defaultAspectRatio={defaultPageAspectRatio}
+                pageNumber={layout.pageNumber}
+                pageIndex={layout.pageIndex}
+                pageWidth={containerWidth}
+                pageHeight={layout.height}
+                currentPageIndexRef={currentPageIndexRef}
                 opacity={documentRecord.opacity}
                 greyscale={documentRecord.greyscale}
                 activeHighlightColor={activeColor}
                 activeHighlightWidth={activeWidth}
-                highlights={(activeVariant?.highlights ?? []).filter(
-                  (h) => h.pageIndex === idx
-                )}
-                imagePins={universalImagePins.filter((pin) => pin.pageIndex === idx)}
+                highlights={highlightsByPage.get(layout.pageIndex) ?? EMPTY_HIGHLIGHTS}
+                imagePins={pinsByPage.get(layout.pageIndex) ?? EMPTY_PINS}
                 focusedHighlightId={focusedHighlightId}
                 selectedHighlightId={selectedHighlightId}
                 isPlacingImage={Boolean(pendingImageFile)}
                 isBase={isBase}
                 isRotatedLandscape={isPortraitViewport}
                 scrollContainerRef={scrollContainerRef}
-                onAddHighlight={onAddHighlight}
+                onPageAspectRatio={handlePageAspectRatio}
+                onAddHighlight={handleAddHighlight}
                 onSelectHighlightId={handleSelectHighlightOnPage}
-                onUpdateHighlightStars={onUpdateHighlightStars}
-                onRemoveHighlight={onRemoveHighlight}
+                onUpdateHighlightStars={handleUpdateHighlightStars}
+                onRemoveHighlight={handleRemoveHighlight}
                 onUndoHighlight={handleUndoTrigger}
                 onPlaceImageAt={handlePlaceImageAt}
-                onOpenImagePin={(pin) => setActivePin(pin)}
-                onBaseEditAttempt={() => setBaseNoticeVisible(true)}
+                onOpenImagePin={handleOpenImagePin}
+                onBaseEditAttempt={handleBaseEditAttempt}
               />
             ))}
+            {visibleWindow.bottomSpacerHeight > 0 && (
+              <div
+                aria-hidden="true"
+                style={{ height: `${visibleWindow.bottomSpacerHeight}px`, flexShrink: 0 }}
+              />
+            )}
           </div>
         )}
       </div>
+
+      {/* Floating Fast Page-Based Navigation Pill ([ ↑ | 12 / 140 | ↓ ]) */}
+      {pdfProxy && numPages > 1 && (
+        <div
+          ref={pageNavRef}
+          className="absolute bottom-14 left-3 sm:left-4 z-30"
+        >
+          {isPageNavOpen && (
+            <div
+              role="dialog"
+              aria-label="Page scrubber and quick jump"
+              className="absolute bottom-11 left-0 w-72 sm:w-80 bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-3.5 z-40 space-y-3"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-white font-mono-num">
+                  Page {currentPageIndex + 1} of {numPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsPageNavOpen(false)}
+                  aria-label="Close page navigation"
+                  className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                </button>
+              </div>
+
+              <input
+                type="range"
+                aria-label="Page scrubber"
+                min={1}
+                max={numPages}
+                step={1}
+                value={currentPageIndex + 1}
+                onChange={(e) => jumpToPage(Number(e.target.value) - 1)}
+                className="studio-range w-full"
+              />
+
+              <div className="grid grid-cols-4 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => jumpToPage(0)}
+                  disabled={currentPageIndex === 0}
+                  className="py-1.5 text-[11px] font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-md transition-colors disabled:opacity-40"
+                >
+                  First
+                </button>
+                <button
+                  type="button"
+                  onClick={() => jumpToPage(currentPageIndex - 10)}
+                  disabled={currentPageIndex === 0}
+                  className="py-1.5 text-[11px] font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-md transition-colors disabled:opacity-40 font-mono-num"
+                >
+                  -10
+                </button>
+                <button
+                  type="button"
+                  onClick={() => jumpToPage(currentPageIndex + 10)}
+                  disabled={currentPageIndex >= numPages - 1}
+                  className="py-1.5 text-[11px] font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-md transition-colors disabled:opacity-40 font-mono-num"
+                >
+                  +10
+                </button>
+                <button
+                  type="button"
+                  onClick={() => jumpToPage(numPages - 1)}
+                  disabled={currentPageIndex >= numPages - 1}
+                  className="py-1.5 text-[11px] font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-md transition-colors disabled:opacity-40"
+                >
+                  Last
+                </button>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const parsed = Number.parseInt(pageJumpInput, 10);
+                  if (Number.isFinite(parsed) && parsed >= 1) {
+                    jumpToPage(parsed - 1);
+                    setPageJumpInput('');
+                    setIsPageNavOpen(false);
+                  }
+                }}
+                className="flex items-center gap-2"
+              >
+                <input
+                  type="number"
+                  min={1}
+                  max={numPages}
+                  value={pageJumpInput}
+                  onChange={(e) => setPageJumpInput(e.target.value)}
+                  placeholder={`Go to 1–${numPages}`}
+                  aria-label="Go to page number"
+                  className="flex-1 min-w-0 px-2.5 py-1.5 text-xs text-white bg-slate-950 border border-slate-700 rounded-lg focus:outline-none focus:border-amber-400 font-mono-num"
+                />
+                <button
+                  type="submit"
+                  className="px-3 py-1.5 text-xs font-semibold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  Go
+                </button>
+              </form>
+            </div>
+          )}
+
+          <div
+            role="group"
+            aria-label="Page navigation"
+            className="inline-flex items-center rounded-xl bg-slate-950/92 backdrop-blur-md border border-slate-700/90 shadow-xl overflow-hidden"
+          >
+            <button
+              type="button"
+              onClick={() => jumpToPage(currentPageIndex - 1)}
+              disabled={currentPageIndex <= 0}
+              aria-label="Previous page"
+              className="p-2 text-slate-200 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-35 disabled:pointer-events-none"
+            >
+              <ChevronUp className="w-4 h-4" aria-hidden="true" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsMenuOpen(false);
+                setIsColorPickerOpen(false);
+                setIsFilterOpen(false);
+                setPageJumpInput('');
+                setIsPageNavOpen((open) => !open);
+              }}
+              aria-label="Jump to page"
+              aria-expanded={isPageNavOpen}
+              data-testid="page-indicator"
+              className={`px-2.5 py-1.5 text-xs font-mono-num font-medium border-x border-slate-800 transition-colors whitespace-nowrap ${
+                isPageNavOpen
+                  ? 'bg-amber-400 text-slate-950 font-semibold'
+                  : 'text-slate-200 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              {currentPageIndex + 1} / {numPages}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => jumpToPage(currentPageIndex + 1)}
+              disabled={currentPageIndex >= numPages - 1}
+              aria-label="Next page"
+              className="p-2 text-slate-200 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-35 disabled:pointer-events-none"
+            >
+              <ChevronDown className="w-4 h-4" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Floating Highlight Filter & Navigation Group (< | ⋮ | >) */}
       <div
@@ -834,6 +1332,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
             onClick={() => {
               setIsMenuOpen(false);
               setIsColorPickerOpen(false);
+              setIsPageNavOpen(false);
               setIsFilterOpen((open) => !open);
             }}
             aria-label="Filter highlights"
@@ -869,7 +1368,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       {pendingImageFile && (
         <div
           role="status"
-          className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-amber-400/70 text-slate-100 text-xs shadow-xl backdrop-blur-md max-w-[90%]"
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-amber-400/70 text-slate-100 text-xs shadow-xl backdrop-blur-md max-w-[90%]"
         >
           <Camera className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
           <span className="truncate">
@@ -892,7 +1391,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       {undoToastMessage && (
         <div
           role="status"
-          className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3.5 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3.5 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
         >
           <RotateCcw className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
           <span>{undoToastMessage}</span>
@@ -903,7 +1402,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       {baseNoticeVisible && isBase && (
         <div
           role="status"
-          className="absolute bottom-14 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2 rounded-lg bg-slate-900/95 border border-slate-700 text-slate-100 text-xs shadow-lg backdrop-blur-md"
         >
           <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
           <span>Base is read-only for highlights. Create a variant to highlight.</span>
@@ -1003,6 +1502,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
               type="button"
               onClick={() => {
                 setIsMenuOpen(false);
+                setIsPageNavOpen(false);
                 setIsColorPickerOpen((open) => !open);
               }}
               aria-label={`Highlight color: ${activeColorMeta.name}`}
@@ -1068,6 +1568,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
               type="button"
               onClick={() => {
                 setIsColorPickerOpen(false);
+                setIsPageNavOpen(false);
                 setIsMenuOpen((open) => !open);
               }}
               aria-label="Controls menu"
@@ -1088,21 +1589,18 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                 aria-label="Reader controls menu"
                 className="absolute right-0 bottom-12 w-72 sm:w-80 bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl p-4 z-50 space-y-4"
               >
-                {/* Header: Back to Library, Document Name, Fullscreen, Close */}
+                {/* Header Row: Back to Folder + Fullscreen + Close */}
                 <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800">
                   <button
                     type="button"
                     onClick={handleExit}
-                    aria-label="Back to library"
-                    className="inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-slate-200 hover:text-white hover:bg-slate-800 rounded-md transition-colors whitespace-nowrap shrink-0"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors"
                   >
                     <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>Library</span>
                   </button>
-                  <span className="text-xs font-medium text-slate-400 truncate">
-                    {documentRecord.name}
-                  </span>
-                  <div className="flex items-center gap-1 shrink-0">
+
+                  <div className="flex items-center gap-1">
                     <button
                       type="button"
                       onClick={toggleFullscreen}
@@ -1110,9 +1608,9 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                       className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-800 rounded-md transition-colors"
                     >
                       {isFullscreen ? (
-                        <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        <Minimize2 className="w-4 h-4" aria-hidden="true" />
                       ) : (
-                        <Maximize2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        <Maximize2 className="w-4 h-4" aria-hidden="true" />
                       )}
                     </button>
                     <button
@@ -1163,10 +1661,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => {
-                        setIsMenuOpen(false);
-                        setIsCameraOpen(true);
-                      }}
+                      onClick={handleOpenCameraCapture}
                       className="col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
                     >
                       <Camera className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />

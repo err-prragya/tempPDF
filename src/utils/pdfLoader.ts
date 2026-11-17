@@ -67,23 +67,67 @@ export async function openPdfHandle(source: Blob | Uint8Array): Promise<ParsedPd
   }
 }
 
-// Concurrency limiter (max 2 simultaneous page renders) to prevent worker/GPU saturation on large PDFs
+// Priority-ordered, cancellation-aware render scheduler (max 2 simultaneous page renders)
 const MAX_CONCURRENT_RENDERS = 2;
 let activeRenders = 0;
-const renderWaiters: Array<() => void> = [];
 
-export async function withRenderSlot<T>(task: () => Promise<T>): Promise<T> {
+interface RenderWaiter {
+  getPriority: () => number;
+  isCancelled: () => boolean;
+  wake: () => void;
+}
+
+const renderWaiters: RenderWaiter[] = [];
+
+function pumpRenderQueue() {
+  while (activeRenders < MAX_CONCURRENT_RENDERS && renderWaiters.length > 0) {
+    // Prune cancelled entries first so scrolled-past pages never block new pages
+    for (let i = renderWaiters.length - 1; i >= 0; i--) {
+      if (renderWaiters[i].isCancelled()) {
+        const [dropped] = renderWaiters.splice(i, 1);
+        dropped.wake();
+      }
+    }
+    if (renderWaiters.length === 0) break;
+
+    let bestIdx = 0;
+    let bestPriority = renderWaiters[0].getPriority();
+    for (let i = 1; i < renderWaiters.length; i++) {
+      const p = renderWaiters[i].getPriority();
+      if (p < bestPriority) {
+        bestPriority = p;
+        bestIdx = i;
+      }
+    }
+
+    const [next] = renderWaiters.splice(bestIdx, 1);
+    next.wake();
+  }
+}
+
+export async function schedulePageRender<T>(
+  getPriority: () => number,
+  isCancelled: () => boolean,
+  task: () => Promise<T>
+): Promise<T | undefined> {
+  if (isCancelled()) return undefined;
+
   if (activeRenders >= MAX_CONCURRENT_RENDERS) {
     await new Promise<void>((resolve) => {
-      renderWaiters.push(resolve);
+      renderWaiters.push({ getPriority, isCancelled, wake: resolve });
     });
+    if (isCancelled()) return undefined;
   }
+
   activeRenders += 1;
   try {
     return await task();
   } finally {
     activeRenders -= 1;
-    const next = renderWaiters.shift();
-    if (next) next();
+    pumpRenderQueue();
   }
+}
+
+export async function withRenderSlot<T>(task: () => Promise<T>): Promise<T | undefined> {
+  return schedulePageRender(() => 0, () => false, task);
 }
