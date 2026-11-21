@@ -52,6 +52,7 @@ export default function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const documentsRef = useRef<PdfDocumentRecord[]>([]);
   const dirHandleRef = useRef<FileSystemDirectoryHandleWithPerms | null>(null);
   const dirHandlesByPathRef = useRef<Record<string, FileSystemDirectoryHandleWithPerms>>({});
   const fileHandlesRef = useRef<Record<string, FileSystemFileHandle>>({});
@@ -63,6 +64,11 @@ export default function App() {
     updatedAt: Date.now(),
     documents: {},
   });
+
+  const commitDocuments = useCallback((nextDocs: PdfDocumentRecord[]) => {
+    documentsRef.current = nextDocs;
+    setDocuments(nextDocs);
+  }, []);
 
   useEffect(() => {
     const cache = assetUrlCacheRef.current;
@@ -83,7 +89,7 @@ export default function App() {
       dirHandlesByPathRef.current = scan.dirHandlesByPath;
       metadataRef.current = scan.metadata;
       setFolderName(scan.folderName);
-      setDocuments(scan.documents);
+      commitDocuments(scan.documents);
       setSubfolders(scan.subfolders);
       setFolderMode('readwrite');
 
@@ -96,7 +102,7 @@ export default function App() {
         );
       }
     },
-    []
+    [commitDocuments]
   );
 
   // On startup, check if user previously linked a folder handle
@@ -148,15 +154,18 @@ export default function App() {
 
   const updateActiveDocument = useCallback(
     (updater: (doc: PdfDocumentRecord) => PdfDocumentRecord) => {
-      setDocuments((prev) => {
-        const nextDocs = prev.map((doc) =>
-          doc.id === activeDocId ? updater(doc) : doc
-        );
-        persistMetadataToFolder(nextDocs);
-        return nextDocs;
+      let changed = false;
+      const nextDocs = documentsRef.current.map((doc) => {
+        if (doc.id !== activeDocId) return doc;
+        const next = updater(doc);
+        if (next !== doc) changed = true;
+        return next;
       });
+      if (!changed) return;
+      commitDocuments(nextDocs);
+      persistMetadataToFolder(nextDocs);
     },
-    [activeDocId, persistMetadataToFolder]
+    [activeDocId, commitDocuments, persistMetadataToFolder]
   );
 
   const handleChooseFolder = async () => {
@@ -245,7 +254,7 @@ export default function App() {
       fallbackFilesRef.current = scan.filesByName;
       metadataRef.current = scan.metadata;
       setFolderName(scan.folderName);
-      setDocuments(scan.documents);
+      commitDocuments(scan.documents);
       setSubfolders(scan.subfolders);
       setCurrentFolderPath('');
       setFolderMode('readonly-fallback');
@@ -359,7 +368,7 @@ export default function App() {
       fileHandlesRef.current = scan.fileHandlesByName;
       dirHandlesByPathRef.current = scan.dirHandlesByPath;
       metadataRef.current = await writeFolderMetadata(handle, scan.documents, scan.metadata);
-      setDocuments(scan.documents);
+      commitDocuments(scan.documents);
       setSubfolders(scan.subfolders);
 
       if (files.length === 1 && lastAddedPath) {
@@ -426,7 +435,7 @@ export default function App() {
         dirHandlesByPathRef.current
       );
       delete fileHandlesRef.current[targetDoc.name];
-      setDocuments(remaining);
+      commitDocuments(remaining);
       cleanupUnreferencedAssets(candidateAssets, remaining);
       if (activeDocId === docId) {
         setActiveDocId(null);
@@ -556,9 +565,9 @@ export default function App() {
           setActiveSource(null);
         }}
         onPagesResolved={(numPages) => {
-          if (activeDoc.pageCount !== numPages) {
-            updateActiveDocument((doc) => ({ ...doc, pageCount: numPages }));
-          }
+          updateActiveDocument((doc) =>
+            doc.pageCount === numPages ? doc : { ...doc, pageCount: numPages }
+          );
         }}
         onToggleGreyscale={(greyscale) =>
           updateActiveDocument((doc) => ({ ...doc, greyscale }))
@@ -624,20 +633,18 @@ export default function App() {
         onDeleteVariant={(index) => {
           const targetVar = activeDoc.variants[index];
           const candidateAssets = (targetVar?.imagePins ?? []).map((p) => p.assetFileName);
-          setDocuments((prev) => {
-            const nextDocs = prev.map((doc) => {
-              if (doc.id !== activeDocId) return doc;
-              const { variants, activeVariantIndex } = deleteVariantAt(
-                doc.variants,
-                index,
-                doc.activeVariantIndex
-              );
-              return { ...doc, variants, activeVariantIndex };
-            });
-            persistMetadataToFolder(nextDocs);
-            cleanupUnreferencedAssets(candidateAssets, nextDocs);
-            return nextDocs;
+          const nextDocs = documentsRef.current.map((doc) => {
+            if (doc.id !== activeDocId) return doc;
+            const { variants, activeVariantIndex } = deleteVariantAt(
+              doc.variants,
+              index,
+              doc.activeVariantIndex
+            );
+            return { ...doc, variants, activeVariantIndex };
           });
+          commitDocuments(nextDocs);
+          persistMetadataToFolder(nextDocs);
+          cleanupUnreferencedAssets(candidateAssets, nextDocs);
         }}
         onAddHighlight={(hl: HighlightRect) =>
           updateActiveDocument((doc) => {
@@ -689,16 +696,14 @@ export default function App() {
         }
         onRemoveImagePin={(pinId: string) => {
           const removedPin = getDocumentImagePins(activeDoc).find((p) => p.id === pinId);
-          setDocuments((prev) => {
-            const nextDocs = prev.map((doc) =>
-              doc.id === activeDocId ? removeUniversalImagePinFromDocument(doc, pinId) : doc
-            );
-            persistMetadataToFolder(nextDocs);
-            if (removedPin) {
-              cleanupUnreferencedAssets([removedPin.assetFileName], nextDocs);
-            }
-            return nextDocs;
-          });
+          const nextDocs = documentsRef.current.map((doc) =>
+            doc.id === activeDocId ? removeUniversalImagePinFromDocument(doc, pinId) : doc
+          );
+          commitDocuments(nextDocs);
+          persistMetadataToFolder(nextDocs);
+          if (removedPin) {
+            cleanupUnreferencedAssets([removedPin.assetFileName], nextDocs);
+          }
         }}
       />
       </>

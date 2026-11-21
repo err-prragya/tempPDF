@@ -56,10 +56,13 @@ interface DragState {
   startLocalY: number;
   pageWidth: number;
   pageHeight: number;
+  scrollRemainder: number;
   mode: DragGestureMode | 'blocked';
 }
 
 const MAX_CANVAS_PIXEL_WIDTH = 1800;
+const MAX_CANVAS_PIXEL_HEIGHT = 2400;
+const MAX_CANVAS_PIXEL_AREA = 1800 * 2200;
 const EMPTY_HIGHLIGHTS: HighlightRect[] = [];
 const EMPTY_PINS: ImagePin[] = [];
 
@@ -105,7 +108,21 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
   const [renderTick, setRenderTick] = useState(0);
   const [draftHighlight, setDraftHighlight] = useState<HighlightRect | null>(null);
 
-  // Render PDF page with priority queue; release canvas pixels automatically on unmount
+  // Release canvas GPU backing store only when page unmounts from virtual window
+  useEffect(() => {
+    return () => {
+      if (baseCanvasRef.current) {
+        baseCanvasRef.current.width = 0;
+        baseCanvasRef.current.height = 0;
+      }
+      if (overlayCanvasRef.current) {
+        overlayCanvasRef.current.width = 0;
+        overlayCanvasRef.current.height = 0;
+      }
+    };
+  }, []);
+
+  // Render PDF page into an offscreen bufferCanvas and blit atomically so resizes/cancels never tear or flash blank
   useEffect(() => {
     const baseCanvas = baseCanvasRef.current;
     const overlayCanvas = overlayCanvasRef.current;
@@ -113,7 +130,16 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
 
     let cancelled = false;
     let activeRenderTask: { cancel: () => void; promise: Promise<void> } | null = null;
+    let bufferCanvas: HTMLCanvasElement | null = null;
     let timerId: number | null = null;
+
+    const releaseBuffer = () => {
+      if (bufferCanvas) {
+        bufferCanvas.width = 0;
+        bufferCanvas.height = 0;
+        bufferCanvas = null;
+      }
+    };
 
     const startRender = async () => {
       try {
@@ -126,13 +152,20 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
             if (cancelled) return;
 
             const baseViewport = page.getViewport({ scale: 1 });
-            const nextRatio = baseViewport.height / Math.max(1, baseViewport.width);
+            const safeW = Math.max(1, baseViewport.width);
+            const safeH = Math.max(1, baseViewport.height);
+            const nextRatio = safeH / safeW;
             onPageAspectRatioRef.current?.(pageIndex, nextRatio);
 
-            const rawScale = pageWidth / Math.max(1, baseViewport.width);
+            const rawScale = pageWidth / safeW;
             const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-            const maxScale = MAX_CANVAS_PIXEL_WIDTH / Math.max(1, baseViewport.width);
-            const renderScale = Math.min(rawScale * dpr, maxScale);
+            const maxWScale = MAX_CANVAS_PIXEL_WIDTH / safeW;
+            const maxHScale = MAX_CANVAS_PIXEL_HEIGHT / safeH;
+            const maxAreaScale = Math.sqrt(MAX_CANVAS_PIXEL_AREA / Math.max(1, safeW * safeH));
+            const renderScale = Math.max(
+              0.1,
+              Math.min(rawScale * dpr, maxWScale, maxHScale, maxAreaScale)
+            );
             const renderViewport = page.getViewport({ scale: renderScale });
 
             if (!baseCanvas || !overlayCanvas || cancelled) return;
@@ -140,44 +173,58 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
             const pixelWidth = Math.max(1, Math.round(renderViewport.width));
             const pixelHeight = Math.max(1, Math.round(renderViewport.height));
 
-            baseCanvas.width = pixelWidth;
-            baseCanvas.height = pixelHeight;
-            overlayCanvas.width = pixelWidth;
-            overlayCanvas.height = pixelHeight;
-
-            const ctx = baseCanvas.getContext('2d', { alpha: false });
-            if (!ctx) return;
-
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fillRect(0, 0, pixelWidth, pixelHeight);
+            const offscreen = document.createElement('canvas');
+            offscreen.width = pixelWidth;
+            offscreen.height = pixelHeight;
+            bufferCanvas = offscreen;
 
             const task = page.render({
-              canvasContext: ctx,
+              canvas: offscreen,
               viewport: renderViewport,
-              canvas: baseCanvas,
+              background: '#FFFFFF',
             });
             activeRenderTask = task;
             await task.promise;
-            if (!cancelled) {
-              setRenderTick((t) => t + 1);
+            activeRenderTask = null;
+
+            if (cancelled || !baseCanvasRef.current || !overlayCanvasRef.current) {
+              releaseBuffer();
+              return;
             }
+
+            if (baseCanvas.width !== pixelWidth || baseCanvas.height !== pixelHeight) {
+              baseCanvas.width = pixelWidth;
+              baseCanvas.height = pixelHeight;
+            }
+            if (overlayCanvas.width !== pixelWidth || overlayCanvas.height !== pixelHeight) {
+              overlayCanvas.width = pixelWidth;
+              overlayCanvas.height = pixelHeight;
+            }
+
+            const baseCtx = baseCanvas.getContext('2d', { alpha: false });
+            if (baseCtx) {
+              baseCtx.drawImage(offscreen, 0, 0);
+            }
+            releaseBuffer();
+            setRenderTick((t) => t + 1);
           }
         );
       } catch (err) {
         if (!cancelled && (err as { name?: string })?.name !== 'RenderingCancelledException') {
           console.error(`PDF page ${pageNumber} render error:`, err);
         }
+        releaseBuffer();
       }
     };
 
     const dist = Math.abs(pageIndex - (currentPageIndexRef.current ?? 0));
-    if (dist === 0) {
+    if (dist <= 1) {
       void startRender();
     } else {
-      // Slight yield for overscan pages so fast scrubbing never stalls the visible page
+      // Short yield for distant overscan pages so visible pages claim queue priority first
       timerId = window.setTimeout(() => {
         void startRender();
-      }, 45);
+      }, 20);
     }
 
     return () => {
@@ -186,16 +233,17 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
         window.clearTimeout(timerId);
       }
       if (activeRenderTask) {
+        const taskToCancel = activeRenderTask;
+        activeRenderTask = null;
         try {
-          activeRenderTask.cancel();
+          taskToCancel.cancel();
         } catch {
           // ignore
         }
+        taskToCancel.promise.catch(() => {}).finally(releaseBuffer);
+      } else {
+        releaseBuffer();
       }
-      baseCanvas.width = 0;
-      baseCanvas.height = 0;
-      overlayCanvas.width = 0;
-      overlayCanvas.height = 0;
     };
   }, [pdf, pageNumber, pageIndex, pageWidth, currentPageIndexRef]);
 
@@ -204,7 +252,7 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
     const baseCanvas = baseCanvasRef.current;
     const overlayCanvas = overlayCanvasRef.current;
     if (!baseCanvas || !overlayCanvas) return;
-    if (baseCanvas.width === 0 || baseCanvas.height === 0) return;
+    if (overlayCanvas.width === 0 || overlayCanvas.height === 0) return;
 
     const ctx = overlayCanvas.getContext('2d');
     if (!ctx) return;
@@ -215,11 +263,12 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
 
     const allHighlights = draftHighlight ? [...highlights, draftHighlight] : highlights;
     if (allHighlights.length === 0) return;
+    if (!solidHighlight && (baseCanvas.width === 0 || baseCanvas.height === 0)) return;
 
     for (const hl of allHighlights) {
-      const sx = Math.floor(hl.xStart * w);
-      const sw = Math.max(2, Math.ceil((hl.xEnd - hl.xStart) * w));
-      const bandH = Math.max(6, Math.round(hl.heightRatio * h));
+      const sx = Math.max(0, Math.min(w - 1, Math.floor(hl.xStart * w)));
+      const sw = Math.max(1, Math.min(w - sx, Math.ceil((hl.xEnd - hl.xStart) * w)));
+      const bandH = Math.max(6, Math.min(h, Math.round(hl.heightRatio * h)));
       const sy = Math.max(0, Math.min(h - bandH, Math.round(hl.yCenter * h - bandH / 2)));
       const hlHex = hl.color || DEFAULT_HIGHLIGHT_COLOR;
 
@@ -271,6 +320,7 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
       startLocalY: local.y,
       pageWidth: local.pageWidth,
       pageHeight: local.pageHeight,
+      scrollRemainder: 0,
       mode: 'pending',
     };
   };
@@ -340,7 +390,12 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
         isRotatedLandscape
       );
       if (scrollContainerRef.current && stepLocalDy !== 0) {
-        scrollContainerRef.current.scrollBy(0, -stepLocalDy);
+        const totalDelta = -stepLocalDy + state.scrollRemainder;
+        const intDelta = Math.trunc(totalDelta);
+        state.scrollRemainder = totalDelta - intDelta;
+        if (intDelta !== 0) {
+          scrollContainerRef.current.scrollTop += intDelta;
+        }
       }
     }
 
@@ -425,6 +480,7 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
     <div
       ref={pageContainerRef}
       data-testid={`pdf-page-${pageNumber}`}
+      data-rendered={renderTick > 0 ? 'true' : 'false'}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={finishDrag}

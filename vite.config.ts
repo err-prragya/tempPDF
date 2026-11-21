@@ -82,10 +82,24 @@ export default defineConfig(() => {
                 },
               },
             },
+            {
+              urlPattern: /^\/pdfjs\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'pdfjs-assets-cache',
+                expiration: {
+                  maxEntries: 250,
+                  maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
           ],
         },
         devOptions: {
-          enabled: true,
+          enabled: false,
           type: 'module',
         },
       }),

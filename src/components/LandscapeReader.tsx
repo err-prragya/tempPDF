@@ -140,12 +140,8 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     w: typeof window !== 'undefined' ? window.innerWidth : 1280,
     h: typeof window !== 'undefined' ? window.innerHeight : 720,
   });
-  const [containerWidth, setContainerWidth] = useState<number>(
-    typeof window !== 'undefined' ? Math.max(window.innerWidth, window.innerHeight) : 1280
-  );
-  const [containerHeight, setContainerHeight] = useState<number>(
-    typeof window !== 'undefined' ? Math.min(window.innerWidth, window.innerHeight) : 720
-  );
+  const [containerWidth, setContainerWidth] = useState<number>(0);
+  const [containerHeight, setContainerHeight] = useState<number>(0);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(
     typeof document !== 'undefined' && Boolean(document.fullscreenElement)
   );
@@ -178,6 +174,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   const [pageJumpInput, setPageJumpInput] = useState('');
 
   const currentPageIndexRef = useRef<number>(0);
+  const pageAspectRatiosRef = useRef<Record<number, number>>({});
   const scrollAnchorRef = useRef<ScrollAnchor>({ pageIndex: 0, offsetInPageRatio: 0 });
   const pendingRestoreAnchorRef = useRef<ScrollAnchor | null>(null);
   const cameraReturnAnchorRef = useRef<ScrollAnchor | null>(null);
@@ -282,8 +279,8 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     };
   }, [isColorPickerOpen, isMenuOpen, isFilterOpen, isPageNavOpen, pendingImageFile, activePin]);
 
-  // Measure scroll container dimensions while preserving exact scroll anchor on resize
-  useEffect(() => {
+  // Measure scroll container dimensions synchronously before mounting PDF pages
+  useLayoutEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
 
@@ -293,12 +290,13 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       const h = el.clientHeight;
       if (w > 0) {
         setContainerWidth((prevW) => {
-          if (prevW !== w && layoutsRef.current.length > 0) {
+          if (prevW > 0 && prevW !== w && layoutsRef.current.length > 0 && !activeScrollTargetRef.current) {
             pendingRestoreAnchorRef.current =
+              pendingRestoreAnchorRef.current ??
               cameraReturnAnchorRef.current ??
               captureScrollAnchor(layoutsRef.current, el.scrollTop);
           }
-          return w;
+          return prevW !== w ? w : prevW;
         });
       }
       if (h > 0) {
@@ -316,13 +314,23 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     let active = true;
     let handle: ParsedPdfHandle | null = null;
     setPdfProxy(null);
+    pageAspectRatiosRef.current = {};
     setPageAspectRatios({});
     setLoadError(null);
     setCurrentPageIndex(0);
+    setVisibleRange({ start: 0, end: 3 });
+    setIsPageNavOpen(false);
+    setIsFilterOpen(false);
+    setIsColorPickerOpen(false);
+    setIsMenuOpen(false);
     currentPageIndexRef.current = 0;
     scrollAnchorRef.current = { pageIndex: 0, offsetInPageRatio: 0 };
     cameraReturnAnchorRef.current = null;
     pendingRestoreAnchorRef.current = null;
+    activeScrollTargetRef.current = null;
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
 
     (async () => {
       try {
@@ -416,12 +424,31 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     []
   );
 
-  // Restore scrollTop synchronously after width/layout changes or camera close
+  // Restore scrollTop (or keep active highlight centered) synchronously after layout commits
   useLayoutEffect(() => {
     const el = scrollContainerRef.current;
-    if (!el || layouts.length === 0) return;
+    if (!el || layouts.length === 0 || containerHeight <= 0) return;
 
-    if (pendingRestoreAnchorRef.current) {
+    const activeTarget = activeScrollTargetRef.current;
+    if (activeTarget) {
+      if (Date.now() > activeTarget.expiresAt) {
+        activeScrollTargetRef.current = null;
+      } else {
+        pendingRestoreAnchorRef.current = null;
+        const pageLayout = layouts[activeTarget.highlight.pageIndex];
+        if (pageLayout) {
+          const alignedTop = Math.max(
+            0,
+            pageLayout.top +
+              activeTarget.highlight.yCenter * pageLayout.height -
+              (el.clientHeight || containerHeight) * 0.45
+          );
+          if (Math.abs(el.scrollTop - alignedTop) > 4) {
+            el.scrollTop = alignedTop;
+          }
+        }
+      }
+    } else if (pendingRestoreAnchorRef.current) {
       const targetAnchor = pendingRestoreAnchorRef.current;
       pendingRestoreAnchorRef.current = null;
       const targetTop = restoreScrollTopFromAnchor(layouts, targetAnchor);
@@ -430,7 +457,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       }
     }
 
-    syncWindowFromScroll(layouts, containerHeight);
+    syncWindowFromScroll(layouts, el.clientHeight || containerHeight);
   }, [layouts, containerHeight, syncWindowFromScroll]);
 
   // Attach rAF-throttled passive scroll listener for 60fps long-PDF virtualization
@@ -457,11 +484,13 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     el.addEventListener('scroll', handleScroll, { passive: true });
     el.addEventListener('wheel', clearReturnAnchorOnUserScroll, { passive: true });
     el.addEventListener('touchstart', clearReturnAnchorOnUserScroll, { passive: true });
+    el.addEventListener('pointerdown', clearReturnAnchorOnUserScroll, { passive: true });
 
     return () => {
       el.removeEventListener('scroll', handleScroll);
       el.removeEventListener('wheel', clearReturnAnchorOnUserScroll);
       el.removeEventListener('touchstart', clearReturnAnchorOnUserScroll);
+      el.removeEventListener('pointerdown', clearReturnAnchorOnUserScroll);
       if (scrollRafRef.current !== null) {
         window.cancelAnimationFrame(scrollRafRef.current);
         scrollRafRef.current = null;
@@ -469,28 +498,34 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
     };
   }, [pdfProxy, containerHeight, syncWindowFromScroll]);
 
-  // Compensate scrollTop cleanly if a newly visited page has a different aspect ratio
+  // Preserve visual scroll anchor cleanly when a page resolves a non-default aspect ratio
   const handlePageAspectRatio = useCallback(
     (pageIdx: number, nextRatio: number) => {
       if (!Number.isFinite(nextRatio) || nextRatio <= 0.1 || nextRatio >= 5) return;
-      setPageAspectRatios((prev) => {
-        const existing = prev[pageIdx] ?? defaultPageAspectRatio;
-        if (Math.abs(existing - nextRatio) <= 0.002) {
-          return prev;
-        }
-        const el = scrollContainerRef.current;
-        if (el && pageIdx < currentPageIndexRef.current) {
-          const oldH = Math.max(1, Math.round(containerWidth * existing));
-          const newH = Math.max(1, Math.round(containerWidth * nextRatio));
-          const delta = newH - oldH;
-          if (delta !== 0) {
-            el.scrollTop = Math.max(0, el.scrollTop + delta);
-          }
-        }
-        return { ...prev, [pageIdx]: nextRatio };
-      });
+      const existing = pageAspectRatiosRef.current[pageIdx] ?? defaultPageAspectRatio;
+      if (Math.abs(existing - nextRatio) <= 0.002) {
+        return;
+      }
+
+      const el = scrollContainerRef.current;
+      if (
+        el &&
+        layoutsRef.current.length > 0 &&
+        !activeScrollTargetRef.current &&
+        pageIdx <= currentPageIndexRef.current &&
+        el.scrollTop > 0
+      ) {
+        pendingRestoreAnchorRef.current =
+          pendingRestoreAnchorRef.current ??
+          cameraReturnAnchorRef.current ??
+          captureScrollAnchor(layoutsRef.current, el.scrollTop);
+      }
+
+      const nextMap = { ...pageAspectRatiosRef.current, [pageIdx]: nextRatio };
+      pageAspectRatiosRef.current = nextMap;
+      setPageAspectRatios(nextMap);
     },
-    [containerWidth, defaultPageAspectRatio]
+    [defaultPageAspectRatio]
   );
 
   useEffect(() => {
@@ -866,7 +901,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       <div
         ref={scrollContainerRef}
         data-testid="pdf-scroll-container"
-        className="relative flex-1 overflow-y-scroll overflow-x-hidden bg-neutral-900 pb-12"
+        className="relative flex-1 min-h-0 overflow-y-scroll overflow-x-hidden bg-neutral-900"
         style={{ touchAction: 'pan-y', overflowAnchor: 'none' }}
       >
         {loadError ? (
@@ -882,7 +917,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
               </button>
             </div>
           </div>
-        ) : !pdfProxy ? (
+        ) : !pdfProxy || containerWidth <= 0 || containerHeight <= 0 ? (
           <div className="h-full flex items-center justify-center p-8">
             <p className="text-sm text-slate-400">Loading PDF...</p>
           </div>
@@ -1100,7 +1135,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
             role="dialog"
             aria-label="Filter and navigate highlights"
             style={{
-              maxHeight: `${Math.min(460, Math.max(220, landscapeHeight - 102))}px`,
+              maxHeight: `${Math.min(460, Math.max(220, landscapeHeight - 112))}px`,
               maxWidth: `${Math.max(300, landscapeWidth - 24)}px`,
             }}
             className="absolute bottom-11 right-0 w-[540px] sm:w-[600px] bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-xl shadow-2xl z-40 flex flex-col overflow-hidden"
@@ -1426,7 +1461,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
       {/* Single Compact Bottom Bar: Variants + Highlight Color + Controls Menu */}
       <footer
         aria-label="Variant navigation bar"
-        className="fixed bottom-0 left-0 right-0 h-12 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800/90 px-2.5 sm:px-4 flex items-center justify-between gap-2.5"
+        className="relative shrink-0 h-12 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800/90 px-2.5 sm:px-4 flex items-center justify-between gap-2.5"
       >
         {/* Always-Visible Variant Names One by One */}
         <nav
