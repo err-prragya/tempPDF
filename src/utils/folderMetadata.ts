@@ -87,6 +87,7 @@ export function normalizeDocumentRecord(
       typeof doc.highlightWidth === 'number'
         ? clampHighlightWidth(doc.highlightWidth)
         : DEFAULT_HIGHLIGHT_WIDTH,
+    highlightSolid: Boolean(doc.highlightSolid),
     activeVariantIndex,
     variants: cleanVariants,
     imagePins: mergedImagePins,

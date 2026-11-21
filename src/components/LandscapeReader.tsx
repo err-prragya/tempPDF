@@ -8,6 +8,7 @@ import {
   ChevronRight,
   ChevronUp,
   Copy,
+  EyeOff,
   Lock,
   Maximize2,
   Minimize2,
@@ -60,6 +61,7 @@ interface LandscapeReaderProps {
   onChangeOpacity: (opacity: number) => void;
   onChangeHighlightColor: (colorHex: string) => void;
   onChangeHighlightWidth: (widthRatio: number) => void;
+  onToggleSolidHighlight: (solid: boolean) => void;
   onSelectVariant: (index: number) => void;
   onCreateVariant: () => void;
   onDuplicateVariant: () => void;
@@ -89,6 +91,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
   onChangeOpacity,
   onChangeHighlightColor,
   onChangeHighlightWidth,
+  onToggleSolidHighlight,
   onSelectVariant,
   onCreateVariant,
   onDuplicateVariant,
@@ -902,6 +905,7 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
                 currentPageIndexRef={currentPageIndexRef}
                 opacity={documentRecord.opacity}
                 greyscale={documentRecord.greyscale}
+                solidHighlight={Boolean(documentRecord.highlightSolid)}
                 activeHighlightColor={activeColor}
                 activeHighlightWidth={activeWidth}
                 highlights={highlightsByPage.get(layout.pageIndex) ?? EMPTY_HIGHLIGHTS}
@@ -1494,8 +1498,25 @@ export const LandscapeReader: React.FC<LandscapeReaderProps> = ({
           })}
         </nav>
 
-        {/* Always-Visible Highlight Color + Packed Controls Menu */}
+        {/* Solid Mode + Highlight Color + Packed Controls Menu */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* Toggleable Solid Highlight Mode (hides text beneath highlights) */}
+          <button
+            type="button"
+            onClick={() => onToggleSolidHighlight(!Boolean(documentRecord.highlightSolid))}
+            aria-label="Solid highlight mode"
+            aria-pressed={Boolean(documentRecord.highlightSolid)}
+            title="Solid mode: hide text under highlights"
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 min-h-[32px] ${
+              documentRecord.highlightSolid
+                ? 'bg-amber-400 text-slate-950 border-amber-400 font-semibold shadow-sm'
+                : 'bg-slate-900 text-slate-200 border-slate-700 hover:bg-slate-800'
+            }`}
+          >
+            <EyeOff className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            <span>Solid</span>
+          </button>
+
           {/* Highlight Color Picker */}
           <div ref={colorPickerRef} className="relative">
             <button

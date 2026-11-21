@@ -40,6 +40,7 @@ export interface PdfDocumentRecord {
   opacity: number; // [0.05..1]
   highlightColor: string; // Active hex color for new highlights
   highlightWidth: number; // Normalized highlight band thickness [0.008..0.048]
+  highlightSolid?: boolean; // Solid opaque highlight mode hiding underlying text
   activeVariantIndex: number;
   variants: PdfVariant[];
   imagePins?: ImagePin[]; // Universal image pins shared across all variants

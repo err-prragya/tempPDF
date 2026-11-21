@@ -552,6 +552,9 @@ export default function App() {
             highlightWidth: clampHighlightWidth(highlightWidth),
           }))
         }
+        onToggleSolidHighlight={(highlightSolid) =>
+          updateActiveDocument((doc) => ({ ...doc, highlightSolid }))
+        }
         onSelectVariant={(index) =>
           updateActiveDocument((doc) => ({
             ...doc,

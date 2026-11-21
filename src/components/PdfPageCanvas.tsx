@@ -23,6 +23,7 @@ interface PdfPageCanvasProps {
   currentPageIndexRef: React.RefObject<number>;
   opacity: number;
   greyscale: boolean;
+  solidHighlight?: boolean;
   activeHighlightColor: string;
   activeHighlightWidth: number;
   highlights: HighlightRect[];
@@ -71,6 +72,7 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
   currentPageIndexRef,
   opacity,
   greyscale,
+  solidHighlight = false,
   activeHighlightColor,
   activeHighlightWidth,
   highlights = EMPTY_HIGHLIGHTS,
@@ -222,24 +224,33 @@ const PdfPageCanvasInner: React.FC<PdfPageCanvasProps> = ({
       const hlHex = hl.color || DEFAULT_HIGHLIGHT_COLOR;
 
       ctx.save();
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(sx, sy, sw, bandH);
+      if (solidHighlight) {
+        // Solid mode: completely occlude underlying PDF text with opaque highlight color
+        ctx.fillStyle = hlHex;
+        ctx.fillRect(sx, sy, sw, bandH);
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.18)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sx + 0.5, sy + 0.5, Math.max(1, sw - 1), Math.max(1, bandH - 1));
+      } else {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(sx, sy, sw, bandH);
 
-      ctx.filter = greyscale ? 'grayscale(100%)' : 'none';
-      ctx.drawImage(baseCanvas, sx, sy, sw, bandH, sx, sy, sw, bandH);
+        ctx.filter = greyscale ? 'grayscale(100%)' : 'none';
+        ctx.drawImage(baseCanvas, sx, sy, sw, bandH, sx, sy, sw, bandH);
 
-      ctx.filter = 'none';
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.fillStyle = hexToRgba(hlHex, 0.36);
-      ctx.fillRect(sx, sy, sw, bandH);
+        ctx.filter = 'none';
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = hexToRgba(hlHex, 0.36);
+        ctx.fillRect(sx, sy, sw, bandH);
 
-      ctx.globalCompositeOperation = 'source-over';
-      const edgeH = Math.max(2, Math.round(bandH * 0.09));
-      ctx.fillStyle = hexToRgba(hlHex, 0.88);
-      ctx.fillRect(sx, sy + bandH - edgeH, sw, edgeH);
+        ctx.globalCompositeOperation = 'source-over';
+        const edgeH = Math.max(2, Math.round(bandH * 0.09));
+        ctx.fillStyle = hexToRgba(hlHex, 0.88);
+        ctx.fillRect(sx, sy + bandH - edgeH, sw, edgeH);
+      }
       ctx.restore();
     }
-  }, [highlights, draftHighlight, greyscale, renderTick]);
+  }, [highlights, draftHighlight, greyscale, solidHighlight, renderTick]);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
