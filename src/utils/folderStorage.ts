@@ -7,6 +7,11 @@ import {
   type FolderMetadataFile,
   type FolderPdfEntry,
 } from './folderMetadata';
+import {
+  joinRelativePath,
+  normalizeRelativePath,
+  splitParentAndBaseName,
+} from './folderTree';
 
 export interface FileSystemPermissionDescriptor {
   mode?: 'read' | 'readwrite';
@@ -126,6 +131,8 @@ export interface FolderScanResult {
   documents: PdfDocumentRecord[];
   metadata: FolderMetadataFile;
   fileHandlesByName: Record<string, FileSystemFileHandle>;
+  dirHandlesByPath: Record<string, FileSystemDirectoryHandleWithPerms>;
+  subfolders: string[];
 }
 
 export async function scanFolderHandle(
@@ -133,41 +140,75 @@ export async function scanFolderHandle(
 ): Promise<FolderScanResult> {
   const pdfEntries: FolderPdfEntry[] = [];
   const fileHandlesByName: Record<string, FileSystemFileHandle> = {};
+  const dirHandlesByPath: Record<string, FileSystemDirectoryHandleWithPerms> = {
+    '': dirHandle,
+  };
+  const subfoldersSet = new Set<string>();
   let rawMetadataText: string | null = null;
 
-  for await (const entry of dirHandle.values()) {
-    if (entry.kind !== 'file') continue;
-    const fileHandle = entry as FileSystemFileHandle;
-
-    if (entry.name === FOLDER_DATA_FILENAME) {
-      try {
-        const metaFile = await fileHandle.getFile();
-        rawMetadataText = await metaFile.text();
-      } catch {
-        rawMetadataText = null;
+  const walkDirectory = async (
+    currentDir: FileSystemDirectoryHandleWithPerms,
+    prefixPath: string
+  ) => {
+    for await (const entry of currentDir.values()) {
+      if (
+        prefixPath === '' &&
+        entry.kind === 'file' &&
+        entry.name === FOLDER_DATA_FILENAME
+      ) {
+        const fileHandle = entry as FileSystemFileHandle;
+        try {
+          const metaFile = await fileHandle.getFile();
+          rawMetadataText = await metaFile.text();
+        } catch {
+          rawMetadataText = null;
+        }
+        continue;
       }
-      continue;
-    }
 
-    if (entry.name.toLowerCase().endsWith('.pdf')) {
-      const file = await fileHandle.getFile();
-      pdfEntries.push({
-        name: entry.name,
-        fileSize: file.size,
-        lastModified: file.lastModified,
-      });
-      fileHandlesByName[entry.name] = fileHandle;
+      // Skip hidden files/folders such as .temppdf-assets, .git, .DS_Store
+      if (entry.name.startsWith('.')) {
+        continue;
+      }
+
+      if (entry.kind === 'directory') {
+        const subPath = joinRelativePath(prefixPath, entry.name);
+        const subDirHandle = entry as FileSystemDirectoryHandleWithPerms;
+        subfoldersSet.add(subPath);
+        dirHandlesByPath[subPath] = subDirHandle;
+        await walkDirectory(subDirHandle, subPath);
+        continue;
+      }
+
+      if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.pdf')) {
+        const fileHandle = entry as FileSystemFileHandle;
+        const file = await fileHandle.getFile();
+        const relPath = joinRelativePath(prefixPath, entry.name);
+        pdfEntries.push({
+          name: relPath,
+          fileSize: file.size,
+          lastModified: file.lastModified,
+        });
+        fileHandlesByName[relPath] = fileHandle;
+      }
     }
-  }
+  };
+
+  await walkDirectory(dirHandle, '');
 
   const parsedMeta = parseFolderMetadata(rawMetadataText);
   const { activeDocuments, metadata } = mergeFolderPdfsWithMetadata(pdfEntries, parsedMeta);
+  const subfolders = Array.from(subfoldersSet).sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  );
 
   return {
     folderName: dirHandle.name,
     documents: activeDocuments,
     metadata,
     fileHandlesByName,
+    dirHandlesByPath,
+    subfolders,
   };
 }
 
@@ -196,15 +237,49 @@ export function writeFolderMetadata(
   return writeQueue.then(() => nextMetadata);
 }
 
+async function resolveDirectoryHandle(
+  rootDirHandle: FileSystemDirectoryHandleWithPerms,
+  relativeDirPath: string,
+  create: boolean,
+  cachedDirHandles?: Record<string, FileSystemDirectoryHandleWithPerms>
+): Promise<FileSystemDirectoryHandleWithPerms> {
+  const cleanPath = normalizeRelativePath(relativeDirPath);
+  if (!cleanPath) return rootDirHandle;
+
+  const cached = cachedDirHandles?.[cleanPath];
+  if (cached) return cached;
+
+  const segments = cleanPath.split('/');
+  let current: FileSystemDirectoryHandleWithPerms = rootDirHandle;
+  for (const segment of segments) {
+    current = (await current.getDirectoryHandle(segment, {
+      create,
+    })) as FileSystemDirectoryHandleWithPerms;
+  }
+  return current;
+}
+
 export async function writePdfFileToFolder(
-  dirHandle: FileSystemDirectoryHandleWithPerms,
-  file: File
-): Promise<FileSystemFileHandle> {
-  const fileHandle = await dirHandle.getFileHandle(file.name, { create: true });
+  rootDirHandle: FileSystemDirectoryHandleWithPerms,
+  file: File,
+  targetSubfolderPath = '',
+  cachedDirHandles?: Record<string, FileSystemDirectoryHandleWithPerms>
+): Promise<{ fileHandle: FileSystemFileHandle; relativePath: string }> {
+  const cleanSubfolder = normalizeRelativePath(targetSubfolderPath);
+  const targetDir = await resolveDirectoryHandle(
+    rootDirHandle,
+    cleanSubfolder,
+    true,
+    cachedDirHandles
+  );
+  const fileHandle = await targetDir.getFileHandle(file.name, { create: true });
   const writable = await fileHandle.createWritable();
   await writable.write(file);
   await writable.close();
-  return fileHandle;
+  return {
+    fileHandle,
+    relativePath: joinRelativePath(cleanSubfolder, file.name),
+  };
 }
 
 export const FOLDER_ASSETS_DIR = '.temppdf-assets';
@@ -247,69 +322,103 @@ export async function deleteImageAssetFromFolder(
 }
 
 export async function deletePdfFromFolder(
-  dirHandle: FileSystemDirectoryHandleWithPerms,
-  fileName: string,
+  rootDirHandle: FileSystemDirectoryHandleWithPerms,
+  relativeFilePath: string,
   remainingDocuments: PdfDocumentRecord[],
-  existingMetadata?: FolderMetadataFile
+  existingMetadata?: FolderMetadataFile,
+  cachedDirHandles?: Record<string, FileSystemDirectoryHandleWithPerms>
 ): Promise<FolderMetadataFile> {
-  await dirHandle.removeEntry(fileName);
+  const { parentPath, baseName } = splitParentAndBaseName(relativeFilePath);
+  const parentDir = await resolveDirectoryHandle(
+    rootDirHandle,
+    parentPath,
+    false,
+    cachedDirHandles
+  );
+  await parentDir.removeEntry(baseName);
+
   const cleanedDocs = { ...(existingMetadata?.documents ?? {}) };
-  delete cleanedDocs[fileName];
+  delete cleanedDocs[relativeFilePath];
   const baseMeta: FolderMetadataFile = {
     version: 1,
     updatedAt: Date.now(),
     documents: cleanedDocs,
   };
-  return writeFolderMetadata(dirHandle, remainingDocuments, baseMeta);
+  return writeFolderMetadata(rootDirHandle, remainingDocuments, baseMeta);
 }
 
 /**
  * Fallback scanner for browsers / embedded iframes where showDirectoryPicker is restricted.
- * Reads files selected via <input type="file" webkitdirectory />.
+ * Reads files selected via <input type="file" webkitdirectory /> including nested subfolders.
  */
 export async function scanFallbackDirectoryFiles(fileList: FileList): Promise<{
   folderName: string;
   documents: PdfDocumentRecord[];
   metadata: FolderMetadataFile;
   filesByName: Record<string, File>;
+  subfolders: string[];
 }> {
   const files = Array.from(fileList);
   const pdfEntries: FolderPdfEntry[] = [];
   const filesByName: Record<string, File> = {};
+  const subfoldersSet = new Set<string>();
   let rawMetaText: string | null = null;
   let folderName = 'Selected Folder';
 
   for (const file of files) {
-    const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-    const parts = rel.split('/');
+    const rawRel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+    const parts = normalizeRelativePath(rawRel).split('/').filter(Boolean);
+    if (parts.length === 0) continue;
+
     if (parts.length > 1 && parts[0]) {
       folderName = parts[0];
     }
-    // Only inspect direct children of the selected folder (depth <= 2)
-    if (parts.length > 2) continue;
 
-    if (file.name === FOLDER_DATA_FILENAME) {
+    const relParts = parts.length > 1 ? parts.slice(1) : parts;
+    if (relParts.length === 0) continue;
+
+    if (relParts.length === 1 && relParts[0] === FOLDER_DATA_FILENAME) {
       rawMetaText = await file.text();
       continue;
     }
 
-    if (file.name.toLowerCase().endsWith('.pdf')) {
+    // Ignore hidden files/folders such as .temppdf-assets or .DS_Store at any depth
+    if (relParts.some((segment) => segment.startsWith('.'))) {
+      continue;
+    }
+
+    // Record all intermediate subfolder paths
+    if (relParts.length > 1) {
+      let acc = '';
+      for (let i = 0; i < relParts.length - 1; i++) {
+        acc = acc ? `${acc}/${relParts[i]}` : relParts[i];
+        subfoldersSet.add(acc);
+      }
+    }
+
+    const leafName = relParts[relParts.length - 1];
+    if (leafName.toLowerCase().endsWith('.pdf')) {
+      const relPath = relParts.join('/');
       pdfEntries.push({
-        name: file.name,
+        name: relPath,
         fileSize: file.size,
         lastModified: file.lastModified,
       });
-      filesByName[file.name] = file;
+      filesByName[relPath] = file;
     }
   }
 
   const parsedMeta = parseFolderMetadata(rawMetaText);
   const { activeDocuments, metadata } = mergeFolderPdfsWithMetadata(pdfEntries, parsedMeta);
+  const subfolders = Array.from(subfoldersSet).sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  );
 
   return {
     folderName,
     documents: activeDocuments,
     metadata,
     filesByName,
+    subfolders,
   };
 }

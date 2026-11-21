@@ -1,10 +1,13 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ChevronDown,
+  ChevronRight,
   Download,
   FilePlus2,
   FileText,
   FileUp,
+  Folder,
   FolderOpen,
   FolderSync,
   Maximize2,
@@ -12,6 +15,12 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { PdfDocumentRecord } from '../types/pdf';
+import {
+  buildFolderTree,
+  collectAllSubfolderPaths,
+  getPdfDisplayName,
+  type FolderTreeNode,
+} from '../utils/folderTree';
 import { PWAInstallButton } from './PWAInstallButton';
 
 export type FolderMode = 'none' | 'pending-permission' | 'readwrite' | 'readonly-fallback';
@@ -20,13 +29,14 @@ interface LibraryViewProps {
   folderMode: FolderMode;
   folderName: string | null;
   documents: PdfDocumentRecord[];
+  subfolders: string[];
   isBusy: boolean;
   errorMessage: string | null;
   onChooseFolder: () => void;
   onReconnectFolder: () => void;
   onRefreshFolder: () => void;
   onFallbackFolderSelected: (files: FileList) => void;
-  onImportFiles: (files: FileList | File[]) => void;
+  onImportFiles: (files: FileList | File[], targetSubfolderPath?: string) => void;
   onCreateSampleInFolder: () => void;
   onExportFallbackMetadata: () => void;
   onOpenDocument: (docId: string) => void;
@@ -38,6 +48,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   folderMode,
   folderName,
   documents,
+  subfolders,
   isBusy,
   errorMessage,
   onChooseFolder,
@@ -53,15 +64,57 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fallbackDirInputRef = useRef<HTMLInputElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const uploadTargetPathRef = useRef<string>('');
+  const [dragTargetPath, setDragTargetPath] = useState<string | null>(null);
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(() => new Set());
 
   const isConnected = folderMode === 'readwrite' || folderMode === 'readonly-fallback';
 
+  const folderTree = useMemo(
+    () => buildFolderTree(documents, subfolders),
+    [documents, subfolders]
+  );
+
+  const allSubfolderPaths = useMemo(
+    () => collectAllSubfolderPaths(folderTree),
+    [folderTree]
+  );
+
+  const allCollapsed =
+    allSubfolderPaths.length > 0 &&
+    allSubfolderPaths.every((p) => collapsedPaths.has(p));
+
+  const toggleFolder = (path: string) => {
+    setCollapsedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleAllFolders = () => {
+    if (allCollapsed) {
+      setCollapsedPaths(new Set());
+    } else {
+      setCollapsedPaths(new Set(allSubfolderPaths));
+    }
+  };
+
+  const triggerUploadToFolder = (targetPath: string) => {
+    uploadTargetPathRef.current = targetPath;
+    fileInputRef.current?.click();
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      onImportFiles(e.target.files);
+      onImportFiles(e.target.files, uploadTargetPathRef.current);
       e.target.value = '';
     }
+    uploadTargetPathRef.current = '';
   };
 
   const handleFallbackDirChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -71,13 +124,192 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     }
   };
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDropToPath = (
+    e: React.DragEvent<HTMLElement>,
+    targetPath: string
+  ) => {
     e.preventDefault();
-    setIsDragging(false);
+    e.stopPropagation();
+    setDragTargetPath(null);
     if (!isConnected) return;
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onImportFiles(e.dataTransfer.files);
+      onImportFiles(e.dataTransfer.files, targetPath);
     }
+  };
+
+  const renderPdfRow = (doc: PdfDocumentRecord) => {
+    const displayName = getPdfDisplayName(doc.name);
+    const totalHighlights = doc.variants.reduce(
+      (sum, v) => sum + v.highlights.length,
+      0
+    );
+
+    return (
+      <div
+        key={doc.id}
+        data-testid={`pdf-row-${doc.name}`}
+        className="flex items-center justify-between gap-4 px-4 sm:px-5 py-3.5 hover:bg-slate-900/90 transition-colors"
+      >
+        <div className="flex items-center gap-3.5 min-w-0">
+          <FileText
+            className="w-4 h-4 text-slate-400 shrink-0"
+            aria-hidden="true"
+          />
+          <div className="min-w-0">
+            <h2
+              title={doc.name}
+              className="font-display text-sm font-semibold text-white truncate"
+            >
+              {displayName}
+            </h2>
+            <p className="text-xs text-slate-400 font-mono-num truncate">
+              {doc.variants.length}{' '}
+              {doc.variants.length === 1 ? 'variant' : 'variants'}
+              {totalHighlights > 0 && (
+                <span>
+                  {' '}
+                  · {totalHighlights}{' '}
+                  {totalHighlights === 1 ? 'highlight' : 'highlights'}
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => onOpenDocument(doc.id)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-white hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 min-h-[36px]"
+          >
+            <Maximize2 className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>Open</span>
+          </button>
+          {folderMode === 'readwrite' && (
+            <button
+              type="button"
+              onClick={() => onDeleteDocument(doc.id)}
+              aria-label={`Delete ${doc.name}`}
+              className="inline-flex items-center justify-center p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition-colors min-h-[36px] min-w-[36px]"
+            >
+              <Trash2 className="w-4 h-4" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderFolderBranch = (node: FolderTreeNode, depth = 0): React.ReactNode => {
+    const isCollapsed = collapsedPaths.has(node.path);
+    const isDragTarget = dragTargetPath === node.path;
+
+    return (
+      <div
+        key={node.path}
+        data-testid={`subfolder-node-${node.path}`}
+        onDragOver={(e) => {
+          if (folderMode !== 'readwrite') return;
+          e.preventDefault();
+          e.stopPropagation();
+          setDragTargetPath(node.path);
+        }}
+        onDragLeave={(e) => {
+          e.stopPropagation();
+          if (dragTargetPath === node.path) {
+            setDragTargetPath(null);
+          }
+        }}
+        onDrop={(e) => handleDropToPath(e, node.path)}
+        className={
+          depth === 0
+            ? `rounded-2xl border overflow-hidden transition-colors ${
+                isDragTarget
+                  ? 'border-amber-400 bg-amber-950/15'
+                  : 'border-slate-800 bg-slate-900/50'
+              }`
+            : `rounded-xl border overflow-hidden transition-colors ${
+                isDragTarget
+                  ? 'border-amber-400 bg-amber-950/15'
+                  : 'border-slate-800/80 bg-slate-950/40'
+              }`
+        }
+      >
+        <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-900/85 border-b border-slate-800/80">
+          <button
+            type="button"
+            onClick={() => toggleFolder(node.path)}
+            aria-expanded={!isCollapsed}
+            aria-label={`Toggle folder ${node.path}`}
+            className="flex items-center gap-2.5 min-w-0 flex-1 text-left group"
+          >
+            {isCollapsed ? (
+              <ChevronRight
+                className="w-4 h-4 text-slate-400 group-hover:text-white shrink-0 transition-colors"
+                aria-hidden="true"
+              />
+            ) : (
+              <ChevronDown
+                className="w-4 h-4 text-slate-400 group-hover:text-white shrink-0 transition-colors"
+                aria-hidden="true"
+              />
+            )}
+            {isCollapsed ? (
+              <Folder
+                className="w-4 h-4 text-amber-400 shrink-0"
+                aria-hidden="true"
+              />
+            ) : (
+              <FolderOpen
+                className="w-4 h-4 text-amber-400 shrink-0"
+                aria-hidden="true"
+              />
+            )}
+            <span
+              title={node.path}
+              className="font-display text-sm font-semibold text-white truncate"
+            >
+              {node.name}
+            </span>
+            <span className="text-[11px] font-mono-num text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md shrink-0">
+              {node.totalPdfCount} {node.totalPdfCount === 1 ? 'PDF' : 'PDFs'}
+            </span>
+          </button>
+
+          {folderMode === 'readwrite' && (
+            <button
+              type="button"
+              onClick={() => triggerUploadToFolder(node.path)}
+              disabled={isBusy}
+              aria-label={`Add PDF to ${node.path}`}
+              title={`Add PDF to ${node.path}`}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-slate-300 hover:text-slate-950 bg-slate-800/90 hover:bg-amber-400 rounded-lg transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
+            >
+              <FileUp className="w-3.5 h-3.5 sm:w-3 sm:h-3" aria-hidden="true" />
+              <span className="hidden sm:inline">Add PDF</span>
+            </button>
+          )}
+        </div>
+
+        {!isCollapsed && (
+          <div className="pl-2.5 sm:pl-5 border-l-2 border-slate-800/70 ml-2.5 sm:ml-4 my-1.5 mr-1.5 space-y-2">
+            {node.documents.length > 0 && (
+              <div className="rounded-xl border border-slate-800/70 bg-slate-950/35 divide-y divide-slate-800/70 overflow-hidden">
+                {node.documents.map(renderPdfRow)}
+              </div>
+            )}
+
+            {node.subfolders.map((child) => renderFolderBranch(child, depth + 1))}
+
+            {node.documents.length === 0 && node.subfolders.length === 0 && (
+              <div className="px-4 py-3 text-xs text-slate-500">
+                No PDFs in this subfolder
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -94,7 +326,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             {isConnected ? (
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => triggerUploadToFolder('')}
                 disabled={isBusy}
                 className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-400 rounded-lg hover:bg-amber-300 transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
               >
@@ -198,8 +430,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 Open a PDF folder
               </h1>
               <p className="text-base text-slate-400 leading-relaxed">
-                Loads every PDF from your chosen folder and stores highlights and variants right
-                inside it.
+                Loads every PDF and subfolder from your chosen folder and stores highlights and
+                variants right inside it.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3 pt-1">
@@ -228,12 +460,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             <section
               onDragOver={(e) => {
                 e.preventDefault();
-                setIsDragging(true);
+                setDragTargetPath('');
               }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleDrop}
+              onDragLeave={() => {
+                if (dragTargetPath === '') setDragTargetPath(null);
+              }}
+              onDrop={(e) => handleDropToPath(e, '')}
               className={`rounded-2xl border p-5 md:p-6 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                isDragging
+                dragTargetPath === ''
                   ? 'border-amber-400 bg-amber-950/20'
                   : 'border-slate-800 bg-slate-900/60'
               }`}
@@ -251,11 +485,28 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   </h1>
                   <p className="text-xs text-slate-400 font-mono-num">
                     {documents.length} {documents.length === 1 ? 'PDF' : 'PDFs'}
+                    {allSubfolderPaths.length > 0 && (
+                      <span>
+                        {' '}
+                        · {allSubfolderPaths.length}{' '}
+                        {allSubfolderPaths.length === 1 ? 'subfolder' : 'subfolders'}
+                      </span>
+                    )}
                   </p>
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {allSubfolderPaths.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleToggleAllFolders}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-300 bg-slate-800/80 hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <span>{allCollapsed ? 'Expand all' : 'Collapse all'}</span>
+                  </button>
+                )}
+
                 {folderMode === 'readwrite' && (
                   <button
                     type="button"
@@ -290,15 +541,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               </div>
             </section>
 
-            {/* PDF List */}
-            {documents.length === 0 ? (
+            {/* PDF & Subfolder Hierarchy */}
+            {documents.length === 0 && folderTree.subfolders.length === 0 ? (
               <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-10 text-center space-y-4">
                 <p className="text-sm text-slate-400">No PDFs in {folderName} yet.</p>
                 {folderMode === 'readwrite' && (
                   <div className="flex flex-wrap items-center justify-center gap-3">
                     <button
                       type="button"
-                      onClick={() => fileInputRef.current?.click()}
+                      onClick={() => triggerUploadToFolder('')}
                       className="px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-400 rounded-lg hover:bg-amber-300 transition-colors whitespace-nowrap shrink-0"
                     >
                       Add PDF
@@ -315,53 +566,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 )}
               </section>
             ) : (
-              <section
-                aria-label="PDFs in folder"
-                className="rounded-2xl border border-slate-800 bg-slate-900/50 divide-y divide-slate-800/80 overflow-hidden"
-              >
-                {documents.map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-slate-900 transition-colors"
-                  >
-                    <div className="flex items-center gap-3.5 min-w-0">
-                      <FileText
-                        className="w-4 h-4 text-slate-400 shrink-0"
-                        aria-hidden="true"
-                      />
-                      <div className="min-w-0">
-                        <h2 className="font-display text-sm font-semibold text-white truncate">
-                          {doc.name}
-                        </h2>
-                        <p className="text-xs text-slate-400 font-mono-num">
-                          {doc.variants.length}{' '}
-                          {doc.variants.length === 1 ? 'variant' : 'variants'}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => onOpenDocument(doc.id)}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-white hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 min-h-[36px]"
-                      >
-                        <Maximize2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>Open</span>
-                      </button>
-                      {folderMode === 'readwrite' && (
-                        <button
-                          type="button"
-                          onClick={() => onDeleteDocument(doc.id)}
-                          aria-label={`Delete ${doc.name}`}
-                          className="inline-flex items-center justify-center p-2 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition-colors min-h-[36px] min-w-[36px]"
-                        >
-                          <Trash2 className="w-4 h-4" aria-hidden="true" />
-                        </button>
-                      )}
-                    </div>
+              <section aria-label="PDFs in folder" className="space-y-4">
+                {folderTree.documents.length > 0 && (
+                  <div className="rounded-2xl border border-slate-800 bg-slate-900/50 divide-y divide-slate-800/80 overflow-hidden">
+                    {folderTree.documents.map(renderPdfRow)}
                   </div>
-                ))}
+                )}
+
+                {folderTree.subfolders.map((subfolderNode) =>
+                  renderFolderBranch(subfolderNode, 0)
+                )}
               </section>
             )}
           </>

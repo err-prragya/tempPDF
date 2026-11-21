@@ -44,6 +44,7 @@ export default function App() {
   const [folderMode, setFolderMode] = useState<FolderMode>('none');
   const [folderName, setFolderName] = useState<string | null>(null);
   const [documents, setDocuments] = useState<PdfDocumentRecord[]>([]);
+  const [subfolders, setSubfolders] = useState<string[]>([]);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
   const [activeSource, setActiveSource] = useState<Blob | Uint8Array | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -51,6 +52,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const dirHandleRef = useRef<FileSystemDirectoryHandleWithPerms | null>(null);
+  const dirHandlesByPathRef = useRef<Record<string, FileSystemDirectoryHandleWithPerms>>({});
   const fileHandlesRef = useRef<Record<string, FileSystemFileHandle>>({});
   const fallbackFilesRef = useRef<Record<string, File>>({});
   const fallbackAssetsRef = useRef<Map<string, Blob>>(new Map());
@@ -77,9 +79,11 @@ export default function App() {
       fallbackFilesRef.current = {};
       const scan = await scanFolderHandle(handle);
       fileHandlesRef.current = scan.fileHandlesByName;
+      dirHandlesByPathRef.current = scan.dirHandlesByPath;
       metadataRef.current = scan.metadata;
       setFolderName(scan.folderName);
       setDocuments(scan.documents);
+      setSubfolders(scan.subfolders);
       setFolderMode('readwrite');
 
       // Ensure .temppdf-data.json is initialized if PDFs exist in folder
@@ -233,12 +237,14 @@ export default function App() {
     setErrorMessage(null);
     try {
       dirHandleRef.current = null;
+      dirHandlesByPathRef.current = {};
       fileHandlesRef.current = {};
       const scan = await scanFallbackDirectoryFiles(fileList);
       fallbackFilesRef.current = scan.filesByName;
       metadataRef.current = scan.metadata;
       setFolderName(scan.folderName);
       setDocuments(scan.documents);
+      setSubfolders(scan.subfolders);
       setFolderMode('readonly-fallback');
     } catch (err) {
       console.error('Fallback folder load failed:', err);
@@ -306,7 +312,10 @@ export default function App() {
     [documents, folderMode]
   );
 
-  const handleImportFiles = async (fileList: FileList | File[]) => {
+  const handleImportFiles = async (
+    fileList: FileList | File[],
+    targetSubfolderPath = ''
+  ) => {
     const files = Array.from(fileList);
     if (files.length === 0) return;
 
@@ -320,7 +329,7 @@ export default function App() {
     setErrorMessage(null);
 
     try {
-      let lastAddedName: string | null = null;
+      let lastAddedPath: string | null = null;
       for (const file of files) {
         const isPdfMime = file.type === 'application/pdf';
         const isPdfExt = file.name.toLowerCase().endsWith('.pdf');
@@ -334,17 +343,24 @@ export default function App() {
           continue;
         }
 
-        await writePdfFileToFolder(handle, file);
-        lastAddedName = file.name;
+        const written = await writePdfFileToFolder(
+          handle,
+          file,
+          targetSubfolderPath,
+          dirHandlesByPathRef.current
+        );
+        lastAddedPath = written.relativePath;
       }
 
       const scan = await scanFolderHandle(handle);
       fileHandlesRef.current = scan.fileHandlesByName;
+      dirHandlesByPathRef.current = scan.dirHandlesByPath;
       metadataRef.current = await writeFolderMetadata(handle, scan.documents, scan.metadata);
       setDocuments(scan.documents);
+      setSubfolders(scan.subfolders);
 
-      if (files.length === 1 && lastAddedName) {
-        const addedDoc = scan.documents.find((d) => d.name === lastAddedName);
+      if (files.length === 1 && lastAddedPath) {
+        const addedDoc = scan.documents.find((d) => d.name === lastAddedPath);
         if (addedDoc) {
           const fileHandle = fileHandlesRef.current[addedDoc.name];
           if (fileHandle) {
@@ -392,15 +408,19 @@ export default function App() {
     setIsBusy(true);
     setErrorMessage(null);
     try {
-      const candidateAssets = targetDoc.variants.flatMap((v) =>
-        (v.imagePins ?? []).map((p) => p.assetFileName)
-      );
+      const candidateAssets = [
+        ...getDocumentImagePins(targetDoc).map((p) => p.assetFileName),
+        ...targetDoc.variants.flatMap((v) =>
+          (v.imagePins ?? []).map((p) => p.assetFileName)
+        ),
+      ];
       const remaining = documents.filter((d) => d.id !== docId);
       metadataRef.current = await deletePdfFromFolder(
         handle,
         targetDoc.name,
         remaining,
-        metadataRef.current
+        metadataRef.current,
+        dirHandlesByPathRef.current
       );
       delete fileHandlesRef.current[targetDoc.name];
       setDocuments(remaining);
@@ -689,6 +709,7 @@ export default function App() {
         folderMode={folderMode}
         folderName={folderName}
         documents={documents}
+        subfolders={subfolders}
         isBusy={isBusy}
         errorMessage={errorMessage}
         onChooseFolder={handleChooseFolder}

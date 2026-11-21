@@ -145,3 +145,52 @@ test('parseFolderMetadata migrates and deduplicates legacy per-variant imagePins
   assert.equal(doc.variants[1].imagePins.length, 0);
   assert.equal(doc.variants[2].imagePins.length, 0);
 });
+
+test('mergeFolderPdfsWithMetadata keeps nested relative-path identity distinct across sibling subfolders', () => {
+  const existing = parseFolderMetadata(
+    JSON.stringify({
+      version: 1,
+      updatedAt: 400,
+      documents: {
+        'Physics/Unit 1.pdf': {
+          id: 'doc_phys',
+          name: 'Physics/Unit 1.pdf',
+          opacity: 0.45,
+          variants: [
+            { id: 'b1', name: 'Base', isBase: true, highlights: [], createdAt: 1 },
+            { id: 'v_phys', name: 'Mechanics', isBase: false, highlights: [], createdAt: 2 },
+          ],
+        },
+        'Chemistry/Unit 1.pdf': {
+          id: 'doc_chem',
+          name: 'Chemistry/Unit 1.pdf',
+          opacity: 0.85,
+          variants: [{ id: 'b2', name: 'Base', isBase: true, highlights: [], createdAt: 1 }],
+        },
+      },
+    })
+  );
+
+  const { activeDocuments, metadata } = mergeFolderPdfsWithMetadata(
+    [
+      { name: 'Chemistry/Unit 1.pdf', fileSize: 1200 },
+      { name: 'Physics/Unit 1.pdf', fileSize: 2400 },
+      { name: 'Physics/Optics/Unit 1.pdf', fileSize: 3600 },
+    ],
+    existing,
+    500
+  );
+
+  assert.equal(activeDocuments.length, 3);
+  const phys = metadata.documents['Physics/Unit 1.pdf'];
+  const chem = metadata.documents['Chemistry/Unit 1.pdf'];
+  const optics = metadata.documents['Physics/Optics/Unit 1.pdf'];
+
+  assert.equal(phys.id, 'doc_phys');
+  assert.equal(phys.variants.length, 2);
+  assert.equal(phys.opacity, 0.45);
+  assert.equal(chem.id, 'doc_chem');
+  assert.equal(chem.variants.length, 1);
+  assert.equal(chem.opacity, 0.85);
+  assert.ok(optics.id && optics.id !== 'doc_phys' && optics.id !== 'doc_chem');
+});
