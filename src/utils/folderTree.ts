@@ -132,3 +132,43 @@ export function collectAllSubfolderPaths(root: FolderTreeNode): string[] {
   visit(root);
   return paths;
 }
+
+export function getFolderNodeAtPath(
+  root: FolderTreeNode,
+  rawPath: string
+): FolderTreeNode {
+  const cleanPath = normalizeRelativePath(rawPath);
+  if (!cleanPath) return root;
+
+  const segments = cleanPath.split('/');
+  let current = root;
+  for (const segment of segments) {
+    const next = current.subfolders.find((child) => child.name === segment);
+    if (!next) {
+      return current;
+    }
+    current = next;
+  }
+  return current;
+}
+
+export interface FolderBreadcrumb {
+  label: string;
+  path: string;
+}
+
+export function getBreadcrumbs(
+  rootLabel: string,
+  rawPath: string
+): FolderBreadcrumb[] {
+  const crumbs: FolderBreadcrumb[] = [{ label: rootLabel, path: '' }];
+  const cleanPath = normalizeRelativePath(rawPath);
+  if (!cleanPath) return crumbs;
+
+  let acc = '';
+  for (const segment of cleanPath.split('/')) {
+    acc = acc ? `${acc}/${segment}` : segment;
+    crumbs.push({ label: segment, path: acc });
+  }
+  return crumbs;
+}

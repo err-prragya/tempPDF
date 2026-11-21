@@ -45,6 +45,7 @@ export default function App() {
   const [folderName, setFolderName] = useState<string | null>(null);
   const [documents, setDocuments] = useState<PdfDocumentRecord[]>([]);
   const [subfolders, setSubfolders] = useState<string[]>([]);
+  const [currentFolderPath, setCurrentFolderPath] = useState<string>('');
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
   const [activeSource, setActiveSource] = useState<Blob | Uint8Array | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -175,6 +176,7 @@ export default function App() {
         setErrorMessage('Read/write folder permission is required to load PDFs and store data.');
         return;
       }
+      setCurrentFolderPath('');
       await applyScannedHandle(handle);
     } catch (err) {
       const errObj = err as { name?: string };
@@ -245,6 +247,7 @@ export default function App() {
       setFolderName(scan.folderName);
       setDocuments(scan.documents);
       setSubfolders(scan.subfolders);
+      setCurrentFolderPath('');
       setFolderMode('readonly-fallback');
     } catch (err) {
       console.error('Fallback folder load failed:', err);
@@ -710,6 +713,8 @@ export default function App() {
         folderName={folderName}
         documents={documents}
         subfolders={subfolders}
+        currentFolderPath={currentFolderPath}
+        onNavigateFolder={setCurrentFolderPath}
         isBusy={isBusy}
         errorMessage={errorMessage}
         onChooseFolder={handleChooseFolder}

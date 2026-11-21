@@ -4,6 +4,8 @@ import type { PdfDocumentRecord } from '../types/pdf';
 import {
   buildFolderTree,
   collectAllSubfolderPaths,
+  getBreadcrumbs,
+  getFolderNodeAtPath,
   getPdfDisplayName,
   joinRelativePath,
   normalizeRelativePath,
@@ -88,5 +90,28 @@ test('buildFolderTree preserves nested subfolders, duplicate basenames in siblin
     'Chemistry',
     'Physics',
     'Physics/Mechanics',
+  ]);
+});
+
+test('getFolderNodeAtPath and getBreadcrumbs resolve nested navigation cleanly', () => {
+  const docs = [
+    makeDoc('Syllabus.pdf', 'd1'),
+    makeDoc('Physics/Mechanics/Chapter 2.pdf', 'd2'),
+  ];
+  const tree = buildFolderTree(docs, ['Physics', 'Physics/Mechanics']);
+
+  assert.equal(getFolderNodeAtPath(tree, '').path, '');
+  const mech = getFolderNodeAtPath(tree, 'Physics/Mechanics');
+  assert.equal(mech.path, 'Physics/Mechanics');
+  assert.equal(mech.documents.length, 1);
+
+  // Unknown deepest child gracefully falls back to deepest valid ancestor
+  assert.equal(getFolderNodeAtPath(tree, 'Physics/Missing').path, 'Physics');
+  assert.equal(getFolderNodeAtPath(tree, 'DoesNotExist').path, '');
+
+  assert.deepEqual(getBreadcrumbs('Study Notes', 'Physics/Mechanics'), [
+    { label: 'Study Notes', path: '' },
+    { label: 'Physics', path: 'Physics' },
+    { label: 'Mechanics', path: 'Physics/Mechanics' },
   ]);
 });
